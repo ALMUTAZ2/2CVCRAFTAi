@@ -11,15 +11,14 @@ type AtsPayload = {
   jobDescription: string
 }
 
-/**
- * يحاول تنظيف النص من أي Markdown و يقتنص جسم الـ JSON
- */
 function extractAndCleanJson(str: string): string {
+  // Remove markdown code blocks
   let cleaned = str
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/gi, "")
     .trim()
 
+  // Find JSON object boundaries
   const startIndex = cleaned.indexOf("{")
   const endIndex = cleaned.lastIndexOf("}")
 
@@ -29,6 +28,8 @@ function extractAndCleanJson(str: string): string {
 
   cleaned = cleaned.substring(startIndex, endIndex + 1)
 
+  // Replace problematic characters inside string values
+  // First, handle newlines within JSON string values
   cleaned = cleaned.replace(/:\s*"([^"]*)"/g, (match, content) => {
     const safeContent = content
       .replace(/\n/g, " ")
@@ -41,28 +42,32 @@ function extractAndCleanJson(str: string): string {
   return cleaned
 }
 
-/**
- * بارسر عام بسيط للـ JSON – مفيد في ردود analyzeATS / rewriteForJob
- */
 function parseJsonSafe(content: string): Record<string, any> {
+  // First try direct parsing
   try {
     return JSON.parse(content.trim())
   } catch {
+    // Try cleaning and extracting
     try {
       const cleaned = extractAndCleanJson(content)
       return JSON.parse(cleaned)
     } catch {
-      const result: Record<string, unknown> = {}
+      // Last resort: try to extract key-value pairs manually
+      const result: Record<string, any> = {}
 
+      // Extract score
       const scoreMatch = content.match(/"score"\s*:\s*(\d+)/i)
       if (scoreMatch) result.score = Number.parseInt(scoreMatch[1])
 
+      // Extract match_level
       const levelMatch = content.match(/"match_level"\s*:\s*"([^"]+)"/i)
       if (levelMatch) result.match_level = levelMatch[1]
 
+      // Extract rewritten_resume
       const resumeMatch = content.match(/"rewritten_resume"\s*:\s*"([\s\S]*?)(?:"\s*[,}])/i)
       if (resumeMatch) result.rewritten_resume = resumeMatch[1].replace(/\\n/g, "\n")
 
+      // Extract contact fields
       const nameMatch = content.match(/"fullName"\s*:\s*"([^"]*)"/i)
       if (nameMatch) result.fullName = nameMatch[1]
 
@@ -78,6 +83,7 @@ function parseJsonSafe(content: string): Record<string, any> {
       const locationMatch = content.match(/"location"\s*:\s*"([^"]*)"/i)
       if (locationMatch) result.location = locationMatch[1]
 
+      // Extract arrays
       const keywordsMatch = content.match(/"missing_keywords"\s*:\s*\[([\s\S]*?)\]/i)
       if (keywordsMatch) {
         const items = keywordsMatch[1].match(/"([^"]+)"/g)
@@ -105,29 +111,13 @@ function parseJsonSafe(content: string): Record<string, any> {
   }
 }
 
-/**
- * استدعاء Groq Chat API – مع خيار تشغيل JSON mode
- */
 async function callGroqChat(
   model: string,
   messages: { role: string; content: string }[],
   temperature = 0.2,
-  jsonMode = false
 ) {
   if (!GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is missing")
-  }
-
-  const body: any = {
-    model,
-    messages,
-    temperature,
-    max_tokens: 4000,
-  }
-
-  // نفعل JSON mode لو نبيه يرجع JSON مضبوط
-  if (jsonMode) {
-    body.response_format = { type: "json_object" }
   }
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -136,7 +126,12 @@ async function callGroqChat(
       Authorization: `Bearer ${GROQ_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      max_tokens: 2000,
+    }),
   })
 
   if (!res.ok) {
@@ -151,10 +146,9 @@ async function callGroqChat(
   return content as string
 }
 
-/**
- * دالة مساعدة لحساب عدد الكلمات
- */
+// helper لحساب عدد الكلمات
 function countWords(text: string): number {
+  if (!text) return 0
   return text
     .trim()
     .split(/\s+/)
@@ -174,7 +168,7 @@ export async function POST(req: Request) {
     }
 
     switch (action) {
-      // 1) تحليل ATS بسيط وسريع
+      // ==================== ATS ANALYZE ====================
       case "analyzeATS": {
         const prompt = `Analyze this resume against the job description. Score from 0-100.
 
@@ -203,15 +197,15 @@ ${payload.jobDescription}`
             { role: "user", content: prompt },
           ],
           0,
-          true,
         )
 
         const parsed = parseJsonSafe(content)
         return NextResponse.json(parsed)
       }
 
-      // 2) إعادة كتابة السيرة للوظيفة مع شرط 500–700 كلمة
+      // ==================== REWRITE FOR JOB + LENGTH CONTROL ====================
       case "rewriteForJob": {
+        // 1) استخراج بيانات التواصل
         const extractPrompt = `Extract contact information from this resume.
 
 IMPORTANT: The full name is usually at the TOP of the resume, often in large text or as a header.
@@ -235,7 +229,6 @@ ${payload.resume}`
             { role: "user", content: extractPrompt },
           ],
           0,
-          true,
         )
 
         const contactInfo = parseJsonSafe(contactContent)
@@ -257,6 +250,7 @@ ${payload.resume}`
           }
         }
 
+        // 2) الـ Pass الأول لإعادة كتابة السيرة (مع شرط 500–700)
         const rewritePrompt = `You are an expert ATS resume writer specializing in creating keyword-optimized, achievement-focused resumes.
 
 ABSOLUTE REQUIREMENT: Final resume MUST be 500-700 words (excluding contact info). This is NON-NEGOTIABLE.
@@ -271,12 +265,43 @@ CRITICAL RULES - DO NOT VIOLATE:
 STRUCTURE (follow this EXACT order):
 
 1. PROFESSIONAL SUMMARY (60-80 words)
+   - Opening line: "[X] years of experience in [field]"
+   - 2-3 core competencies from job description that match candidate's experience
+   - 1-2 key achievements or unique value propositions
+   - Must include 4-6 keywords from job description naturally
+
 2. CORE COMPETENCIES (50-70 words)
+   - 8-12 key skills in 2-3 category groups
+   - Only skills from original resume
+   - Format: Category • Skill 1 • Skill 2 • Skill 3
+
 3. PROFESSIONAL EXPERIENCE (280-350 words)
+   - List in reverse chronological order
+   - For each role: Job Title | Company | Dates
+   - 4-6 bullet points per role focusing on achievements
+   - Start bullets with strong action verbs (Led, Developed, Implemented, Achieved)
+   - Quantify results with numbers, percentages, or scale where possible
+   - Align achievements with job description requirements
+
 4. EDUCATION (40-60 words)
+   - Degree | Institution | Year
+   - Relevant coursework or honors only if space permits
+   - Keep concise
+
 5. TECHNICAL SKILLS (50-80 words)
+   - Organize by category (Programming, Tools, Systems, etc.)
+   - Only list technologies actually mentioned in original resume
+   - Format: Category: skill1, skill2, skill3
+
 6. LANGUAGES (20-30 words) - MANDATORY
-7. CERTIFICATIONS (30-50 words) - only if present in original resume
+   - List each language with proficiency level
+   - Format: • Language Name - Proficiency Level
+   - Levels: Native / Fluent / Advanced / Intermediate / Basic
+   - If not in original, infer conservatively from context (e.g., Arabic if Saudi, English if international work)
+
+7. CERTIFICATIONS (30-50 words)
+   - Only include if in original resume
+   - Format: Certification Name | Issuing Body | Year
 
 FORMATTING REQUIREMENTS:
 - Section headers: ALL CAPS, no special characters
@@ -310,7 +335,7 @@ ${payload.resume}
 JOB DESCRIPTION:
 ${payload.jobDescription}`
 
-        const content = await callGroqChat(
+        const firstContent = await callGroqChat(
           "llama-3.1-8b-instant",
           [
             {
@@ -321,24 +346,95 @@ ${payload.jobDescription}`
             { role: "user", content: rewritePrompt },
           ],
           0.3,
-          true,
         )
 
-        const parsed = parseJsonSafe(content)
+        const firstParsed = parseJsonSafe(firstContent)
+        let rewritten = (firstParsed.rewritten_resume as string) || ""
+        let wordCount = Number(firstParsed.word_count) || countWords(rewritten)
 
-        const rewritten = String(parsed.rewritten_resume || "")
-        const wordCount = countWords(rewritten)
-
-        // ✅ شرط صارم 500–700 كلمة
-        if (wordCount < 500 || wordCount > 700) {
-          throw new Error(
-            `LENGTH_CONSTRAINT_VIOLATION: optimized resume has ${wordCount} words (required 500–700).`,
-          )
+        // 3) لو الطول داخل 500–700 نرجع مباشرة
+        if (wordCount >= 500 && wordCount <= 700) {
+          return NextResponse.json({
+            rewritten_resume: rewritten,
+            word_count: wordCount,
+            contact_info: {
+              fullName: fullName,
+              email: contactInfo.email || "",
+              phone: contactInfo.phone || "",
+              linkedin: contactInfo.linkedin || "",
+              location: contactInfo.location || "",
+            },
+          })
         }
 
+        // 4) Pass ثاني ذكي لو أقل من 500 أو أكثر من 700
+        const refinePrompt = `You previously produced this rewritten resume draft that does NOT meet the required length.
+
+CURRENT DRAFT (about ${wordCount} words):
+"""
+${rewritten}
+"""
+
+ORIGINAL RESUME (source of truth, do NOT invent beyond this):
+"""
+${payload.resume}
+"""
+
+TASK:
+- Adjust and refine the CURRENT DRAFT so that the final resume text is between 520 and 650 words (inclusive).
+- PRIORITY for extra detail (in this order):
+  1) PROFESSIONAL EXPERIENCE (add more context and impact, split long bullets if needed)
+  2) PROFESSIONAL SUMMARY (slightly richer but still concise)
+  3) TECHNICAL SKILLS / CORE COMPETENCIES (grouped and clarified)
+
+HOW TO EXPAND (NO FABRICATION):
+- You may:
+  - Split existing bullets into two more detailed bullets using the SAME underlying facts.
+  - Add context like scale, type of projects, stakeholders, and impact ONLY if implied in the original resume.
+- You MUST NOT:
+  - Change companies, dates, or job titles.
+  - Add new tools, technologies, or certifications that are not in the original resume.
+  - Invent new projects, clients, or achievements.
+
+FORMATTING:
+- Keep the same section order you used in the previous draft.
+- Keep the same headings (PROFESSIONAL SUMMARY, CORE COMPETENCIES, PROFESSIONAL EXPERIENCE, EDUCATION, TECHNICAL SKILLS, LANGUAGES, CERTIFICATIONS).
+- Use the same line breaks and general style.
+- Do NOT add contact info.
+
+WORD COUNT:
+- After writing, count words.
+- If fewer than 520: carefully expand a bit more in EXPERIENCE and SUMMARY.
+- If more than 650: tighten language and remove the weakest bullet(s).
+- Final result must be between 520 and 650 words.
+
+Return ONLY this JSON:
+{
+  "rewritten_resume": "FULL FINAL RESUME TEXT HERE",
+  "word_count": 600
+}`
+
+        const refinedContent = await callGroqChat(
+          "llama-3.1-8b-instant",
+          [
+            {
+              role: "system",
+              content:
+                "You are an ATS resume refiner. You ONLY adjust length and clarity without inventing new facts. Return only valid JSON.",
+            },
+            { role: "user", content: refinePrompt },
+          ],
+          0.3,
+        )
+
+        const refinedParsed = parseJsonSafe(refinedContent)
+        const finalResume = (refinedParsed.rewritten_resume as string) || rewritten
+        const finalCount = Number(refinedParsed.word_count) || countWords(finalResume)
+
+        // حتى لو ما ضبط بالضبط، ما نرمي Error للعميل – نرجع أفضل نسخة مع word_count
         return NextResponse.json({
-          rewritten_resume: rewritten,
-          word_count: typeof parsed.word_count === "number" ? parsed.word_count : wordCount,
+          rewritten_resume: finalResume,
+          word_count: finalCount,
           contact_info: {
             fullName: fullName,
             email: contactInfo.email || "",
@@ -347,169 +443,6 @@ ${payload.jobDescription}`
             location: contactInfo.location || "",
           },
         })
-      }
-
-      // 3) FULL AUDIT متقدم – نسخة Groq من منطق Gemini
-      case "fullAudit": {
-        const jdWordCount = countWords(payload.jobDescription || "")
-        const hasUsableJD = jdWordCount >= 40
-
-        const systemPrompt = `
-You are an elite Enterprise ATS Quality Control Auditor & Global Recruiter.
-
-MISSION:
-- Audit the resume.
-- Produce an optimized ATS-safe version.
-- Optionally evaluate Job Match if the job description is detailed enough.
-
-HARD RULES:
-- You NEVER fabricate experience, tools, companies, projects, or certifications.
-- You ONLY rephrase, reorganize, and clarify what already exists in the original resume.
-- FINAL optimized resume MUST be between 500 and 700 words (inclusive).
-- No markdown, no decorative symbols, no tables, no pipes "|".
-- Resume must be multi-line, with clear UPPERCASE section headings and vertical layout.
-- ONE blank line between sections.
-- Bullets must start with "- " (hyphen + space).
-- Contact info simple and vertical, no inline "Name | Email | Phone".
-
-JOB DESCRIPTION USAGE:
-- If the JD is detailed (around 40+ words), you may compute job_match_analysis.
-- DO NOT copy responsibilities or achievements from the JD into the resume text.
-- JD is for evaluation only, not for inventing new content.
-        `.trim()
-
-        const userPrompt = `
-You will receive:
-1) A resume text to audit and optimize.
-2) A job description for ATS match analysis.
-
-Return ONLY valid JSON with this exact structure:
-
-{
-  "audit_findings": [
-    {
-      "issue": "string",
-      "why_it_is_a_problem": "string",
-      "ats_real_world_impact": "string",
-      "correction_applied": "string"
-    }
-  ],
-  "corrected_before_optimization": {
-    "scores": {
-      "ats_structure": 0,
-      "keyword_match": 0,
-      "experience_impact": 0,
-      "formatting_readability": 0,
-      "seniority_alignment": 0
-    },
-    "final_ats_score": 0,
-    "ats_confidence_level": 0,
-    "ats_rejection_risk": "Low | Medium | High"
-  },
-  "corrected_optimized_resume": {
-    "plain_text": "FULL FINAL RESUME TEXT HERE",
-    "sections": {
-      "summary": "string",
-      "experience": "string",
-      "skills": "string",
-      "education": "string",
-      "certifications": "string"
-    },
-    "word_count": 600
-  },
-  "corrected_after_optimization": {
-    "scores": {
-      "ats_structure": 0,
-      "keyword_match": 0,
-      "experience_impact": 0,
-      "formatting_readability": 0,
-      "seniority_alignment": 0
-    },
-    "final_ats_score": 0,
-    "ats_confidence_level": 0,
-    "ats_rejection_risk": "Low | Medium | High"
-  },
-  "credibility_verdict": {
-    "score_change_rationale": "string",
-    "trust_level": "Low | Medium | High | Very High",
-    "enterprise_readiness": "string"
-  },
-  "job_match_analysis": ${
-    hasUsableJD
-      ? `{
-    "match_score": 0,
-    "match_level": "Low | Medium | High | Excellent",
-    "missing_keywords": ["string"],
-    "recruiter_view": "string"
-  }`
-      : "null"
-  }
-}
-
-CONSTRAINTS ON corrected_optimized_resume.plain_text:
-- 500–700 words TOTAL.
-- Multi-line, ATS-safe, NO pipes "|".
-- Section headers in UPPERCASE (PROFESSIONAL SUMMARY, EXPERIENCE, SKILLS, EDUCATION, CERTIFICATIONS, LANGUAGES if present).
-- ONE blank line between sections.
-- Bullets start with "- " only.
-- Do not collapse everything into one paragraph.
-
-RESUME TO AUDIT:
-"""
-${payload.resume}
-"""
-
-JOB DESCRIPTION:
-"""
-${payload.jobDescription}
-"""
-        `.trim()
-
-        const content = await callGroqChat(
-          "llama-3.1-8b-instant",
-          [
-            {
-              role: "system",
-              content: systemPrompt,
-            },
-            {
-              role: "user",
-              content: userPrompt,
-            },
-          ],
-          0.2,
-          true,
-        )
-
-        let raw = content
-        let cleaned = raw
-          .replace(/```json\s*/gi, "")
-          .replace(/```\s*/gi, "")
-          .trim()
-
-        let parsed: any
-        try {
-          parsed = JSON.parse(cleaned)
-        } catch {
-          const extracted = extractAndCleanJson(raw)
-          parsed = JSON.parse(extracted)
-        }
-
-        const plain = String(parsed?.corrected_optimized_resume?.plain_text || "")
-        const wordCount = countWords(plain)
-
-        if (wordCount < 500 || wordCount > 700) {
-          throw new Error(
-            `LENGTH_CONSTRAINT_VIOLATION: optimized resume has ${wordCount} words (required 500–700).`,
-          )
-        }
-
-        if (!parsed.corrected_optimized_resume) {
-          parsed.corrected_optimized_resume = {}
-        }
-        parsed.corrected_optimized_resume.word_count = wordCount
-
-        return NextResponse.json(parsed)
       }
 
       default:
