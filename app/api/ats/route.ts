@@ -96,7 +96,7 @@ function parseJsonSafe(content: string): any {
         if (items) result.issues = items.map((s) => s.replace(/"/g, ""))
       }
 
-      const suggestionsMatch = content.match(/"suggestions"\s*:\s*\[([\س\S]*?)\]/i)
+      const suggestionsMatch = content.match(/"suggestions"\s*:\s*\[([\s\S]*?)\]/i)
       if (suggestionsMatch) {
         const items = suggestionsMatch[1].match(/"([^"]+)"/g)
         if (items) result.suggestions = items.map((s) => s.replace(/"/g, ""))
@@ -109,6 +109,21 @@ function parseJsonSafe(content: string): any {
       throw new Error("Could not parse response as JSON")
     }
   }
+}
+
+// دالة موحدة لحساب عدد الكلمات من النص نفسه
+function countWords(text: string): number {
+  if (!text) return 0
+
+  // إزالة بعض الرموز اللي ما تعتبر كلمات
+  const cleaned = text
+    .replace(/[•■▪●◆◇◦–\-—]/g, " ") // bullets والشرطات
+    .replace(/[^A-Za-z0-9\u0600-\u06FF]+/g, " ") // نخلي بس عربي/إنجليزي/أرقام
+    .trim()
+
+  if (!cleaned) return 0
+
+  return cleaned.split(/\s+/).filter(Boolean).length
 }
 
 async function callGroqChat(
@@ -368,7 +383,7 @@ ${payload.jobDescription}`
 
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
           const content = await callGroqChat(
-            "llama-3.3-70b-versatile", // 👈 هنا الموديل القوي
+            "llama-3.3-70b-versatile",
             [
               {
                 role: "system",
@@ -385,16 +400,13 @@ ${payload.jobDescription}`
           const rewritten = (parsed.rewritten_resume as string) || ""
           lastRewritten = rewritten
 
-          // لو الموديل ما رجع word_count نحسبه نحن
-          let wordCount: number =
-            typeof parsed.word_count === "number"
-              ? parsed.word_count
-              : rewritten
-                  .trim()
-                  .split(/\s+/)
-                  .filter(Boolean).length
-
+          // ✅ نحسب عدد الكلمات بأنفسنا ونتجاهل word_count من الموديل
+          const wordCount = countWords(rewritten)
           lastWordCount = wordCount
+
+          console.log(
+            `REWRITE ATTEMPT ${attempt}/${MAX_ATTEMPTS} - computed wordCount = ${wordCount}`,
+          )
 
           // تحقق من الطول 500–700 كلمة
           if (wordCount >= 500 && wordCount <= 700) {
