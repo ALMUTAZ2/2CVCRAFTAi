@@ -146,81 +146,6 @@ async function callGroqChat(
   return content as string
 }
 
-// الترتيب المطلوب للأقسام
-const EXPECTED_SECTIONS = [
-  "PROFESSIONAL SUMMARY",
-  "CORE COMPETENCIES",
-  "PROFESSIONAL EXPERIENCE",
-  "EDUCATION",
-  "TECHNICAL SKILLS",
-  "LANGUAGES",
-  "CERTIFICATIONS",
-] as const
-
-type ValidationResult = {
-  ok: boolean
-  issues: string[]
-  wordCount: number
-}
-
-// دالة فحص السيرة الذاتية بعد إعادة الكتابة
-function validateRewrittenResume(text: string): ValidationResult {
-  const issues: string[] = []
-
-  const trimmed = (text || "").trim()
-  let wordCount = 0
-
-  if (trimmed) {
-    wordCount = trimmed
-      .split(/\s+/)
-      .filter(Boolean).length
-  }
-
-  if (!trimmed) {
-    issues.push("EMPTY_REWRITTEN_RESUME")
-  }
-
-  // فحص عدد الكلمات
-  if (wordCount < 500 || wordCount > 700) {
-    issues.push(`WORD_COUNT_OUT_OF_RANGE: ${wordCount}`)
-  }
-
-  // فحص وجود الحرف |
-  if (trimmed.includes("|")) {
-    issues.push("PIPE_CHARACTER_FOUND")
-  }
-
-  // فحص وجود الأقسام وبالترتيب
-  const lines = trimmed.split(/\r?\n/)
-  const sectionIndexes: number[] = []
-
-  for (const section of EXPECTED_SECTIONS) {
-    const idx = lines.findIndex((line) => line.trim() === section)
-    if (idx === -1) {
-      issues.push(`MISSING_SECTION: ${section}`)
-      sectionIndexes.push(-1)
-    } else {
-      sectionIndexes.push(idx)
-    }
-  }
-
-  // لو كل الأقسام موجودة نتأكد من الترتيب
-  if (!sectionIndexes.includes(-1)) {
-    for (let i = 1; i < sectionIndexes.length; i++) {
-      if (sectionIndexes[i] <= sectionIndexes[i - 1]) {
-        issues.push("SECTION_ORDER_INVALID")
-        break
-      }
-    }
-  }
-
-  return {
-    ok: issues.length === 0,
-    issues,
-    wordCount,
-  }
-}
-
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -325,6 +250,7 @@ The FINAL rewritten resume MUST be between 500 and 700 words (excluding contact 
 This is NON-NEGOTIABLE. Do NOT output fewer than 500 words, and do NOT exceed 700 words.
 
 CRITICAL RULES - DO NOT VIOLATE:
+
 1. NEVER fabricate skills, experience, or achievements not in the original resume.
 2. NEVER add technologies, tools, or certifications the candidate doesn't have.
 3. ONLY use information explicitly stated in the original resume.
@@ -344,81 +270,81 @@ TECHNICAL SKILLS
 LANGUAGES
 CERTIFICATIONS
 
-- Do NOT rename or add extra main sections.
-- Each section header MUST be on its own line, all caps.
-- No emojis, no icons, no markdown (#, *, **, etc.).
-- Absolutely NO "|" pipe character anywhere in the resume body.
+Do NOT rename or add extra main sections.
+Each section header MUST be on its own line, all caps.
+No emojis, no icons, no markdown (#, *, **, etc.).
+Absolutely NO "|" pipe character anywhere in the resume body.
 
 LAYOUT RULES:
-- Use a vertical, multi-line layout.
-- Put ONE empty line between sections.
-- Inside each section, each bullet or entry is on its own line.
-- Bullet points MUST start with: •  (bullet + space).
-- Do NOT collapse the entire resume into one long paragraph.
+Use a vertical, multi-line layout.
+Put ONE empty line between sections.
+Inside each section, each bullet or entry is on its own line.
+Bullet points MUST start with: •  (bullet + space).
+Do NOT collapse the entire resume into one long paragraph.
 
 CONTACT INFO:
-- Do NOT include contact info inside the main resume body.
-- The platform will render contact info separately.
-- So do NOT write email, phone, or LinkedIn inside the resume text.
+Do NOT include contact info inside the main resume body.
+The platform will render contact info separately.
+So do NOT write email, phone, or LinkedIn inside the resume text.
 
 STRUCTURE (follow this EXACT order):
 
 1. PROFESSIONAL SUMMARY (60–80 words)
-   - Opening line: "[X] years of experience in [field]"
-   - 2–3 core competencies from job description that match candidate's experience
-   - 1–2 key achievements or unique value propositions
-   - Must include 4–6 relevant keywords from the job description naturally
+Opening line: "[X] years of experience in [field]"
+2–3 core competencies from job description that match candidate's experience
+1–2 key achievements or unique value propositions
+Must include 4–6 relevant keywords from the job description naturally
 
 2. CORE COMPETENCIES (50–70 words)
-   - 8–12 key skills in 2–3 category groups
-   - Only skills from the original resume
-   - Format example:
-     CORE COMPETENCIES
-     • Power Systems: load flow, protection, EV integration
-     • Project Management: planning, stakeholder coordination
-     • Tools: CAD, analytics, reporting
+8–12 key skills in 2–3 category groups
+Only skills from the original resume
+Format example:
+CORE COMPETENCIES
+• Power Systems: load flow, protection, EV integration
+• Project Management: planning, stakeholder coordination
+• Tools: CAD, analytics, reporting
 
 3. PROFESSIONAL EXPERIENCE (280–350 words)
-   - List in reverse chronological order.
-   - For each role, first line:
-     Job Title — Company — Dates
-   - Followed by 4–6 bullet points per role, each starting with "• ".
-   - Start bullets with strong action verbs (Led, Developed, Implemented, Achieved, Optimized).
-   - Quantify results with numbers, percentages, or scale where possible, BUT only if implied or stated in the original resume.
-   - NO duplicate roles: if the same job repeats, merge logically into one continuous role with correct dates.
+List in reverse chronological order.
+For each role, first line:
+Job Title — Company — Dates
+Followed by 4–6 bullet points per role, each starting with "• ".
+Start bullets with strong action verbs (Led, Developed, Implemented, Achieved, Optimized).
+Quantify results with numbers, percentages, or scale where possible, BUT only if implied or stated in the original resume.
+NO duplicate roles: if the same job repeats, merge logically into one continuous role with correct dates.
 
 4. EDUCATION (40–60 words)
-   - Degree, Institution, Country/City, Graduation Year.
-   - Include relevant honors ONLY if already present in original resume.
+Degree, Institution, Country/City, Graduation Year.
+Include relevant honors ONLY if already present in original resume.
 
 5. TECHNICAL SKILLS (50–80 words)
-   - Organize by category (Programming, Tools, Systems, Standards, etc.).
-   - Only list technologies that appear in the original resume.
-   - Use concise format per line with the bullet: • Category: skill1, skill2, skill3
+Organize by category (Programming, Tools, Systems, Standards, etc.).
+Only list technologies that appear in the original resume.
+Use concise format per line with the bullet: • Category: skill1, skill2, skill3
 
 6. LANGUAGES (20–30 words) — MANDATORY
-   - Each language with proficiency level:
-     • Arabic — Native
-     • English — Fluent
-   - Only infer languages that are clearly implied (e.g., Saudi engineer → Arabic, English for international work).
+Each language with proficiency level:
+• Arabic — Native
+• English — Fluent
+Only infer languages that are clearly implied (e.g., Saudi engineer → Arabic, English for international work).
 
 7. CERTIFICATIONS (30–50 words)
-   - Only include REAL certifications explicitly mentioned in the resume (e.g., PMP®, PE, ISO, vendor certifications).
-   - Do NOT treat short trainings or webinars as certifications.
-   - Format:
-     • Certification Name — Issuing Body — Year (if available)
+Only include REAL certifications explicitly mentioned in the resume (e.g., PMP®, PE, ISO, vendor certifications).
+Do NOT treat short trainings or webinars as certifications.
+Format:
+• Certification Name — Issuing Body — Year (if available)
 
 OPTIMIZATION STRATEGY:
-- Mirror important phrases from the job description where they match the candidate's true experience.
-- Replace generic wording with specific, powerful alternatives (while staying truthful).
-- Turn responsibilities into achievement-driven bullets.
-- Every bullet must show clear impact, scope, or ownership.
+Mirror important phrases from the job description where they match the candidate's true experience.
+Replace generic wording with specific, powerful alternatives (while staying truthful).
+Turn responsibilities into achievement-driven bullets.
+Every bullet must show clear impact, scope, or ownership.
 
 WORD COUNT VERIFICATION (MUST DO BEFORE RETURNING):
-- After writing the full resume (plain_text), count the words.
-- If under 500: expand existing bullets and descriptions using only existing facts.
-- If over 700: compress wording and remove redundant phrases, but keep all real experience.
-- FINAL OUTPUT MUST BE between 500 and 700 words.
+After writing the full resume (plain_text), count the words.
+If under 500: expand existing bullets and descriptions using only existing facts.
+If over 700: compress wording and remove redundant phrases, but keep all real experience.
+FINAL OUTPUT MUST BE between 500 and 700 words.
 
 FINAL JSON RESPONSE FORMAT (MANDATORY):
 Return ONLY this JSON object, no markdown and no extra commentary:
@@ -436,14 +362,13 @@ ${payload.resume}
 JOB DESCRIPTION:
 ${payload.jobDescription}`
 
-        const maxAttempts = 3
+        const MAX_ATTEMPTS = 3
         let lastRewritten = ""
         let lastWordCount = 0
-        let lastIssues: string[] = []
 
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
           const content = await callGroqChat(
-            "llama-3.1-8b-instant",
+            "lima-3.3-70b", // 👈 هنا استخدمنا موديل lima الكبير
             [
               {
                 role: "system",
@@ -458,17 +383,24 @@ ${payload.jobDescription}`
           const parsed = parseJsonSafe(content)
 
           const rewritten = (parsed.rewritten_resume as string) || ""
-          const validation = validateRewrittenResume(rewritten)
-
           lastRewritten = rewritten
-          lastWordCount = validation.wordCount
-          lastIssues = validation.issues
 
-          if (validation.ok) {
-            // نجحنا في واحدة من المحاولات
+          // لو الموديل ما رجع word_count نحسبه نحن
+          let wordCount: number =
+            typeof parsed.word_count === "number"
+              ? parsed.word_count
+              : rewritten
+                  .trim()
+                  .split(/\s+/)
+                  .filter(Boolean).length
+
+          lastWordCount = wordCount
+
+          // تحقق من الطول 500–700 كلمة
+          if (wordCount >= 500 && wordCount <= 700) {
             return NextResponse.json({
               rewritten_resume: rewritten,
-              word_count: validation.wordCount,
+              word_count: wordCount,
               contact_info: {
                 fullName,
                 email: (contactInfo.email as string) || "",
@@ -480,20 +412,16 @@ ${payload.jobDescription}`
           }
 
           console.error(
-            `REWRITE_VALIDATION_FAILED (attempt ${attempt}/${maxAttempts}) issues:`,
-            validation.issues,
-            "word_count:",
-            validation.wordCount,
+            `LENGTH_CONSTRAINT_VIOLATION (attempt ${attempt}/${MAX_ATTEMPTS}): optimized resume has ${wordCount} words (required 500–700).`,
           )
         }
 
-        // لو وصلنا هنا فكل المحاولات فشلت
+        // لو ٣ محاولات وما ضبط
         return NextResponse.json(
           {
-            error: "SELF_AUDIT_FAILED",
-            issues: lastIssues,
-            word_count: lastWordCount,
+            error: `LENGTH_CONSTRAINT_VIOLATION_AFTER_${3}_ATTEMPTS`,
             rewritten_resume: lastRewritten,
+            word_count: lastWordCount,
           },
           { status: 500 },
         )
