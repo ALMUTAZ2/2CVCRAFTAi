@@ -31,7 +31,11 @@ function extractAndCleanJson(str: string): string {
   // Replace problematic characters inside string values
   // First, handle newlines within JSON string values
   cleaned = cleaned.replace(/:\s*"([^"]*)"/g, (match, content) => {
-    const safeContent = content.replace(/\n/g, " ").replace(/\r/g, " ").replace(/\t/g, " ").replace(/\\/g, "\\\\")
+    const safeContent = content
+      .replace(/\n/g, " ")
+      .replace(/\r/g, " ")
+      .replace(/\t/g, " ")
+      .replace(/\\/g, "\\\\")
     return `: "${safeContent}"`
   })
 
@@ -107,7 +111,11 @@ function parseJsonSafe(content: string): Record<string, unknown> {
   }
 }
 
-async function callGroqChat(model: string, messages: { role: string; content: string }[], temperature = 0.2) {
+async function callGroqChat(
+  model: string,
+  messages: { role: string; content: string }[],
+  temperature = 0.2
+) {
   if (!GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is missing")
   }
@@ -147,7 +155,10 @@ export async function POST(req: Request) {
     }
 
     if (!payload?.resume || !payload?.jobDescription) {
-      return NextResponse.json({ error: "resume and jobDescription are required" }, { status: 400 })
+      return NextResponse.json(
+        { error: "resume and jobDescription are required" },
+        { status: 400 }
+      )
     }
 
     switch (action) {
@@ -178,7 +189,7 @@ ${payload.jobDescription}`
             { role: "system", content: "You are an ATS. Return only valid JSON, no explanation." },
             { role: "user", content: prompt },
           ],
-          0,
+          0
         )
 
         const parsed = parseJsonSafe(content)
@@ -204,14 +215,15 @@ ${payload.resume}`
           [
             {
               role: "system",
-              content: "You extract contact info from resumes. The name is ALWAYS at the top. Return only valid JSON.",
+              content:
+                "You extract contact info from resumes. The name is ALWAYS at the top. Return only valid JSON.",
             },
             { role: "user", content: extractPrompt },
           ],
-          0,
+          0
         )
 
-        const contactInfo = parseJsonSafe(contactContent)
+        const contactInfo = parseJsonSafe(contactContent) as any
 
         let fullName = (contactInfo.fullName as string) || ""
         if (!fullName) {
@@ -324,14 +336,32 @@ ${payload.jobDescription}`
             },
             { role: "user", content: rewritePrompt },
           ],
-          0.3,
+          0.3
         )
 
-        const parsed = parseJsonSafe(content)
+        const parsed = parseJsonSafe(content) as any
+
+        // ✅ فحص صارم لطول السيرة المحسنة 500–700 كلمة
+        let wordCount = 0
+        if (typeof parsed.word_count === "number") {
+          wordCount = parsed.word_count
+        } else if (typeof parsed.rewritten_resume === "string") {
+          wordCount = parsed.rewritten_resume
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean).length
+          parsed.word_count = wordCount
+        }
+
+        if (wordCount < 500 || wordCount > 700) {
+          throw new Error(
+            `LENGTH_CONSTRAINT_VIOLATION: optimized resume has ${wordCount} words (required 500–700).`
+          )
+        }
 
         return NextResponse.json({
           rewritten_resume: parsed.rewritten_resume || "",
-          word_count: parsed.word_count || 0,
+          word_count: wordCount,
           contact_info: {
             fullName: fullName,
             email: contactInfo.email || "",
