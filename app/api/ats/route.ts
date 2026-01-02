@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server"
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
@@ -131,6 +130,7 @@ async function callGroqChat(
   model: string,
   messages: { role: string; content: string }[],
   temperature = 0.5,
+  maxTokens = 2200,
 ) {
   if (!GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is missing")
@@ -146,7 +146,7 @@ async function callGroqChat(
       model,
       messages,
       temperature,
-      max_tokens: 2200,
+      max_tokens: maxTokens,
     }),
   })
 
@@ -265,6 +265,7 @@ ${payload.resume}
 JOB DESCRIPTION:
 ${payload.jobDescription}`
 
+        // نستخدم max_tokens صغير عشان نوفر توكن – الرد JSON قصير
         const content = await callGroqChat(
           "llama-3.3-70b-versatile",
           [
@@ -276,6 +277,7 @@ ${payload.jobDescription}`
             { role: "user", content: prompt },
           ],
           0.2,
+          600,
         )
 
         const parsed = parseJsonSafe(content)
@@ -309,6 +311,7 @@ ${payload.resume}`
             { role: "user", content: extractPrompt },
           ],
           0,
+          400, // استخراج معلومات تواصل بسيط → توكن أقل
         )
 
         const contactInfo = parseJsonSafe(contactContent)
@@ -397,11 +400,6 @@ STRUCTURE (follow this EXACT order):
 2. CORE COMPETENCIES (about 50–70 words)
 - 8–12 key skills grouped into 2–3 lines.
 - Only use skills present in the original resume (technical, functional, and soft skills that are explicitly mentioned).
-- Example:
-  CORE COMPETENCIES
-  • Power Systems: load flow, protection, EV integration
-  • Project Management: planning, stakeholder coordination, risk management
-  • Tools & Standards: CAD, analytics, SEC standards
 
 3. PROFESSIONAL EXPERIENCE (about 280–350 words)
 - List roles in reverse chronological order.
@@ -417,37 +415,18 @@ STRUCTURE (follow this EXACT order):
 
 4. EDUCATION (about 40–60 words)
 - Degree, Institution, Country/City, Graduation Year.
-- Include honors or GPA only if already mentioned in the original resume.
 
 5. TECHNICAL SKILLS (about 50–80 words)
-- Organize by category: e.g., Power Systems, Tools & Software, Standards & Codes, Project Management.
+- Organize by category.
 - Only list technologies, tools, and standards explicitly mentioned in the original resume.
-- Use compact bullets like:
-  • Power Systems: distribution networks, substations, load flow
-  • Tools & Software: CAD, analysis tools, reporting
 
-6. LANGUAGES (about 20–30 words) — MANDATORY
-- List languages with proficiency level.
-- You may infer:
-  • Arabic — Native
-  • English — Fluent
-  if clearly implied by the resume context (e.g., Saudi engineer with English CV).
+6. LANGUAGES (about 20–30 words)
 
 7. CERTIFICATIONS (about 30–50 words)
-- Only include REAL certifications explicitly mentioned in the resume (e.g., PMP®, vendor or standards certifications).
-- Do NOT treat internal trainings or short courses as certifications unless they are named as such.
-- Format:
-  • Certification Name — Issuing Body — Year (if available)
 
 WORD COUNT STRATEGY:
-- After drafting the resume, estimate the word count.
-- If under 450 words:
-  - Expand bullets using details that already exist in the original resume (project types, technologies, responsibilities, scale).
-  - Do NOT invent new projects or tools — just unpack what is already there.
-- If over 700 words:
-  - Compress by removing repetition and redundant phrases.
-  - Keep all real responsibilities and achievements, but phrase them more concisely.
-- Aim for a final length that feels dense, impactful, and competitive, not padded.
+- If under 450 words, expand using only existing details.
+- If over 700 words, compress by removing redundancy, not real experience.
 
 FINAL JSON RESPONSE FORMAT (MANDATORY):
 Return ONLY this JSON object, no markdown and no extra commentary:
@@ -456,8 +435,6 @@ Return ONLY this JSON object, no markdown and no extra commentary:
   "rewritten_resume": "PROFESSIONAL SUMMARY\\n[content]\\n\\nCORE COMPETENCIES\\n[content]\\n\\nPROFESSIONAL EXPERIENCE\\n[content]\\n\\nEDUCATION\\n[content]\\n\\nTECHNICAL SKILLS\\n[content]\\n\\nLANGUAGES\\n[content]\\n\\nCERTIFICATIONS\\n[content if applicable]",
   "word_count": 650
 }
-
-"rewritten_resume" must exactly follow the formatting rules above.
 
 ORIGINAL RESUME:
 ${payload.resume}
@@ -485,6 +462,7 @@ ${payload.jobDescription}`
               { role: "user", content: rewritePrompt },
             ],
             0.35,
+            1600, // هنا نوفر مقارنة بـ 2200 لكن نخلي مجال لحد 700 كلمة
           )
 
           const parsed = parseJsonSafe(content)
@@ -492,7 +470,6 @@ ${payload.jobDescription}`
           const rewritten = (parsed.rewritten_resume as string) || ""
           lastRewritten = rewritten
 
-          // نحسب عدد الكلمات من النص نفسه
           const wordCount = countWords(rewritten)
           lastWordCount = wordCount
 
@@ -500,7 +477,6 @@ ${payload.jobDescription}`
             `REWRITE ATTEMPT ${attempt}/${MAX_ATTEMPTS} - computed wordCount = ${wordCount}`,
           )
 
-          // نقبل أي شيء بين 350 و 750 كلمة
           if (wordCount >= MIN_WORDS_OK && wordCount <= MAX_WORDS_OK) {
             const baseResponse: any = {
               rewritten_resume: rewritten,
@@ -514,7 +490,6 @@ ${payload.jobDescription}`
               },
             }
 
-            // لو أقل من 450 نضيف تحذير فقط
             if (wordCount < WARNING_THRESHOLD) {
               baseResponse.warning = "WORD_COUNT_BELOW_RECOMMENDED_RANGE_450_700"
             }
@@ -527,7 +502,6 @@ ${payload.jobDescription}`
           )
         }
 
-        // لو بعد 3 محاولات ما وصل 350–750 كلمة نعتبره فشل
         return NextResponse.json(
           {
             error: `LENGTH_CONSTRAINT_VIOLATION_AFTER_${MAX_ATTEMPTS}_ATTEMPTS`,
