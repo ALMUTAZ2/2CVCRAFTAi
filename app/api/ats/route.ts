@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server"
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
@@ -145,7 +146,7 @@ async function callGroqChat(
       model,
       messages,
       temperature,
-      max_tokens: 2000,
+      max_tokens: 2200,
     }),
   })
 
@@ -170,39 +171,111 @@ export async function POST(req: Request) {
     }
 
     if (!payload?.resume || !payload?.jobDescription) {
-      return NextResponse.json({ error: "resume and jobDescription are required" }, { status: 400 })
+      return NextResponse.json(
+        { error: "resume and jobDescription are required" },
+        { status: 400 },
+      )
     }
 
     switch (action) {
       // ===================== ATS ANALYZE =====================
       case "analyzeATS": {
-        const prompt = `Analyze this resume against the job description. Score from 0-100.
+        const prompt = `You are an advanced ATS analysis engine competing with top commercial tools.
 
-SCORING:
-- Start at 100
-- -5 for each missing required skill
-- -3 for each missing preferred skill
-- -10 if experience doesn't match
-- -5 for formatting issues
+TASK:
+Deeply analyze the following resume against the job description and return a structured ATS report.
 
-MATCH LEVELS: 85-100="Excellent", 70-84="Strong", 50-69="Okay", 0-49="Weak"
+EVALUATION DIMENSIONS:
+1) Overall ATS compatibility
+2) Keyword & skills match
+3) Experience alignment with role level and responsibilities
+4) Structural and formatting compatibility for ATS parsing
 
-Return JSON only, no markdown:
-{"score": 75, "match_level": "Strong", "missing_keywords": ["skill1", "skill2"], "issues": ["issue1"], "suggestions": ["suggestion1"]}
+SCORING LOGIC (GUIDELINE, NOT EXHAUSTIVE):
+- Start from 100 and subtract penalties.
+- Missing MUST-HAVE / hard requirements: -5 to -10 each depending on severity.
+- Missing NICE-TO-HAVE / preferred items: -2 to -4 each.
+- Weak or mismatched experience for seniority/role: -10 to -20.
+- Major formatting / parsing risks (tables, columns, heavy graphics, unreadable sections): -5 to -15.
+- Minor formatting issues (inconsistent bullets, spacing, mixed date styles): -1 to -3 each.
+
+MATCH LEVEL (based on final score):
+- 85–100: "Excellent"
+- 70–84: "Strong"
+- 50–69: "Okay"
+- 0–49: "Weak"
+
+OUTPUT REQUIREMENTS:
+- Be precise and practical: your output will be used by a real candidate to improve their resume.
+- Focus on what hurts ATS parsing and recruiter screening the most.
+- Clearly distinguish between:
+  - Structural/formatting issues (that affect parsing)
+  - Content/experience gaps (that affect relevance)
+  - Missing keywords (phrases from the JD that are not clearly present)
+
+RETURN JSON ONLY IN THIS FORMAT (no markdown, no prose outside the JSON):
+
+{
+  "score": 82,
+  "match_level": "Strong",
+  "dimension_scores": {
+    "overall_ats_score": 82,
+    "keyword_match_score": 85,
+    "experience_alignment_score": 78,
+    "formatting_compatibility_score": 88
+  },
+  "ats_structural_health": [
+    "Standard reverse-chronological layout that ATS can parse reliably.",
+    "Sections are clearly labeled and separated.",
+    "No text embedded in images; content appears machine-readable."
+  ],
+  "key_strengths": [
+    "Solid alignment with the target role responsibilities.",
+    "Relevant industry/domain experience with matching terminology.",
+    "Clear progression in responsibilities across roles."
+  ],
+  "critical_gaps": [
+    "Limited mention of specific tools or platforms emphasized in the job description.",
+    "Insufficient quantification of outcomes for key projects (impact, scale, or metrics)."
+  ],
+  "missing_keywords": [
+    "Example keyword 1",
+    "Example keyword 2"
+  ],
+  "issues": [
+    "Dates formatting is inconsistent across roles.",
+    "Some bullet points are too generic and lack measurable impact."
+  ],
+  "suggestions": [
+    "Incorporate 5–8 core keywords from the job description into relevant experience bullets.",
+    "Add 1–2 quantified outcomes to your most recent role to highlight impact (e.g., reliability, efficiency, cost savings).",
+    "Unify date formatting (e.g., MMM YYYY – MMM YYYY) and keep section headings consistent."
+  ]
+}
+
+IMPORTANT NOTES:
+- "score" must be an integer from 0 to 100.
+- "match_level" must be exactly one of: "Excellent", "Strong", "Okay", "Weak".
+- "missing_keywords", "issues", and "suggestions" must each be a flat JSON array of strings.
+- Use clear, concise English for all text fields.
 
 RESUME:
 ${payload.resume}
 
-JOB:
+JOB DESCRIPTION:
 ${payload.jobDescription}`
 
         const content = await callGroqChat(
           "llama-3.3-70b-versatile",
           [
-            { role: "system", content: "You are an ATS. Return only valid JSON, no explanation." },
+            {
+              role: "system",
+              content:
+                "You are an ATS analysis engine. Return only strict JSON following the user schema, no markdown, no extra prose.",
+            },
             { role: "user", content: prompt },
           ],
-          0,
+          0.2,
         )
 
         const parsed = parseJsonSafe(content)
@@ -257,15 +330,26 @@ ${payload.resume}`
           }
         }
 
-        // 2) برومبت إعادة الصياغة مع الشروط المحدثة
-        const rewritePrompt = `You are an expert ATS resume writer specializing in creating keyword-optimized, achievement-focused resumes.
+        // 2) برومبت إعادة الصياغة محسَّن ليكون بجودة منافسين
+        const rewritePrompt = `You are a senior, premium-level ATS resume writer working for a top-tier resume optimization platform.
+
+GOAL:
+Create a job-tailored, ATS-optimized resume that can compete with or outperform leading ATS tools.
+Your writing must feel polished, confident, and impact-driven, while staying 100% truthful to the original resume.
 
 TARGET LENGTH:
 Try to keep the FINAL rewritten resume between 450 and 700 words (excluding contact info).
 This range is recommended for ATS performance, but never sacrifice truthfulness or formatting rules just to hit a specific number.
 
-CRITICAL RULES - DO NOT VIOLATE:
+QUALITY BAR / COMPETITION:
+- Assume the candidate is competing against resumes written by professional paid services.
+- Every bullet point must show clear VALUE: ownership, scope, and measurable or implied impact.
+- Avoid vague or generic phrases ("responsible for", "helped with") unless you immediately follow them with a concrete result.
+- Prefer strong, concise action verbs + outcomes.
+- Integrate relevant keywords from the job description wherever they match the candidate's real experience.
+- Keep language natural, modern, and professional — not robotic and not too flowery.
 
+CRITICAL RULES - DO NOT VIOLATE:
 1. NEVER fabricate skills, experience, or achievements not in the original resume.
 2. NEVER add technologies, tools, or certifications the candidate doesn't have.
 3. ONLY use information explicitly stated in the original resume.
@@ -305,55 +389,65 @@ So do NOT write email, phone, or LinkedIn inside the resume text.
 STRUCTURE (follow this EXACT order):
 
 1. PROFESSIONAL SUMMARY (about 60–80 words)
-Opening line: "[X] years of experience in [field]"
-2–3 core competencies from job description that match candidate's experience
-1–2 key achievements or unique value propositions
-Must include 4–6 relevant keywords from the job description naturally
+- First sentence: "[X] years of experience in [field/industry]" (use the real years from the resume when possible).
+- Emphasize seniority, domain expertise, and role alignment (e.g., electrical distribution, project management, power systems).
+- Mention 2–3 core strengths that are clearly supported by the original resume.
+- Naturally include 4–6 important keywords from the job description that match the candidate's real profile.
 
 2. CORE COMPETENCIES (about 50–70 words)
-8–12 key skills in 2–3 category groups
-Only skills from the original resume
-Example:
-CORE COMPETENCIES
-• Power Systems: load flow, protection, EV integration
-• Project Management: planning, stakeholder coordination
-• Tools: CAD, analytics, reporting
+- 8–12 key skills grouped into 2–3 lines.
+- Only use skills present in the original resume (technical, functional, and soft skills that are explicitly mentioned).
+- Example:
+  CORE COMPETENCIES
+  • Power Systems: load flow, protection, EV integration
+  • Project Management: planning, stakeholder coordination, risk management
+  • Tools & Standards: CAD, analytics, SEC standards
 
 3. PROFESSIONAL EXPERIENCE (about 280–350 words)
-List in reverse chronological order.
-For each role, first line:
-Job Title — Company — Dates
-Followed by 4–6 bullet points per role, each starting with "• ".
-Start bullets with strong action verbs (Led, Developed, Implemented, Achieved, Optimized).
-Quantify results where possible, BUT only if implied or stated in the original resume.
-NO duplicate roles: if the same job repeats, merge logically into one continuous role with correct dates.
+- List roles in reverse chronological order.
+- For each role, first line:
+  Job Title — Company — Dates
+- Then 4–6 bullet points per role, each starting with "• ".
+- Apply these rules for bullets:
+  - Start with strong action verbs (Led, Designed, Implemented, Optimized, Coordinated, Delivered).
+  - Clearly show scope (e.g., size of networks, number of projects, budgets, voltage levels).
+  - Where the original resume provides any numbers or scales (MVA, SAR, # of projects), integrate them as proof of impact.
+  - At least 1–2 bullets per role should highlight measurable or clearly implied outcomes (efficiency, reliability, cost savings, service quality, etc.).
+  - Avoid repeating the same wording; vary verbs and phrasing across bullets.
 
 4. EDUCATION (about 40–60 words)
-Degree, Institution, Country/City, Graduation Year.
-Include relevant honors ONLY if already present in original resume.
+- Degree, Institution, Country/City, Graduation Year.
+- Include honors or GPA only if already mentioned in the original resume.
 
 5. TECHNICAL SKILLS (about 50–80 words)
-Organize by category (Programming, Tools, Systems, Standards, etc.).
-Only list technologies that appear in the original resume.
-Use concise format per line with the bullet: • Category: skill1, skill2, skill3
+- Organize by category: e.g., Power Systems, Tools & Software, Standards & Codes, Project Management.
+- Only list technologies, tools, and standards explicitly mentioned in the original resume.
+- Use compact bullets like:
+  • Power Systems: distribution networks, substations, load flow
+  • Tools & Software: CAD, analysis tools, reporting
 
 6. LANGUAGES (about 20–30 words) — MANDATORY
-Each language with proficiency level:
-• Arabic — Native
-• English — Fluent
-Only infer languages that are clearly implied (e.g., Saudi engineer → Arabic, English for international work).
+- List languages with proficiency level.
+- You may infer:
+  • Arabic — Native
+  • English — Fluent
+  if clearly implied by the resume context (e.g., Saudi engineer with English CV).
 
 7. CERTIFICATIONS (about 30–50 words)
-Only include REAL certifications explicitly mentioned in the resume (e.g., PMP®, PE, ISO, vendor certifications).
-Do NOT treat short trainings or webinars as certifications.
-Format:
-• Certification Name — Issuing Body — Year (if available)
+- Only include REAL certifications explicitly mentioned in the resume (e.g., PMP®, vendor or standards certifications).
+- Do NOT treat internal trainings or short courses as certifications unless they are named as such.
+- Format:
+  • Certification Name — Issuing Body — Year (if available)
 
-WORD COUNT VERIFICATION:
-After writing the full resume (plain_text), count the words.
-If under 450: where possible, expand existing bullets and descriptions using only existing facts from the original resume.
-If over 700: compress wording and remove redundant phrases, but keep all real experience.
-Aim to keep the final output between 450 and 700 words, but never violate the truthfulness rules just to reach a target length.
+WORD COUNT STRATEGY:
+- After drafting the resume, estimate the word count.
+- If under 450 words:
+  - Expand bullets using details that already exist in the original resume (project types, technologies, responsibilities, scale).
+  - Do NOT invent new projects or tools — just unpack what is already there.
+- If over 700 words:
+  - Compress by removing repetition and redundant phrases.
+  - Keep all real responsibilities and achievements, but phrase them more concisely.
+- Aim for a final length that feels dense, impactful, and competitive, not padded.
 
 FINAL JSON RESPONSE FORMAT (MANDATORY):
 Return ONLY this JSON object, no markdown and no extra commentary:
@@ -371,7 +465,7 @@ ${payload.resume}
 JOB DESCRIPTION:
 ${payload.jobDescription}`
 
-        const MAX_ATTEMPTS = 3
+        const MAX_ATTEMPTS = 1
         const MIN_WORDS_OK = 350
         const MAX_WORDS_OK = 750
         const WARNING_THRESHOLD = 450
@@ -386,11 +480,11 @@ ${payload.jobDescription}`
               {
                 role: "system",
                 content:
-                  "You are an expert ATS resume writer. You follow all formatting rules and try to keep resumes between 450-700 words without fabricating information. Return only valid JSON.",
+                  "You are a premium ATS resume optimization engine. You follow all formatting rules, aim for 450–700 words, write impact-focused bullets, and NEVER fabricate information. Return only valid JSON.",
               },
               { role: "user", content: rewritePrompt },
             ],
-            0.3,
+            0.35,
           )
 
           const parsed = parseJsonSafe(content)
@@ -408,7 +502,7 @@ ${payload.jobDescription}`
 
           // نقبل أي شيء بين 350 و 750 كلمة
           if (wordCount >= MIN_WORDS_OK && wordCount <= MAX_WORDS_OK) {
-            const baseResponse = {
+            const baseResponse: any = {
               rewritten_resume: rewritten,
               word_count: wordCount,
               contact_info: {
@@ -422,13 +516,9 @@ ${payload.jobDescription}`
 
             // لو أقل من 450 نضيف تحذير فقط
             if (wordCount < WARNING_THRESHOLD) {
-              return NextResponse.json({
-                ...baseResponse,
-                warning: "WORD_COUNT_BELOW_RECOMMENDED_RANGE_450_700",
-              })
+              baseResponse.warning = "WORD_COUNT_BELOW_RECOMMENDED_RANGE_450_700"
             }
 
-            // داخل النطاق المريح → بدون تحذير
             return NextResponse.json(baseResponse)
           }
 
