@@ -24,28 +24,27 @@ export default function Page() {
   const [jobDescription, setJobDescription] = useState("")
   const [loading, setLoading] = useState(false)
   const [activeAction, setActiveAction] = useState<"ats" | "rewrite" | null>(null)
+
   const [atsResult, setAtsResult] = useState<AtsResult>(null)
   const [rewrittenResume, setRewrittenResume] = useState("")
-  const [error, setError] = useState<string | null>(null)
   const [contactInfo, setContactInfo] = useState<ContactInfo | null>(null)
 
-  // ✅ word count للسيرة المحسّنة
   const [wordCount, setWordCount] = useState<number | null>(null)
+  const [warning, setWarning] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const isBusy = (name: "ats" | "rewrite") => loading && activeAction === name
 
-  // ✅ نستخدمه فقط لتلوين النص (أخضر/أحمر)، مو لتقفيل الزر
-  const isWordCountValid =
-    wordCount === null || (wordCount >= 500 && wordCount <= 700)
-
   const handleCallApi = async (action: "analyzeATS" | "rewriteForJob") => {
     setError(null)
-    setAtsResult(null)
 
-    if (action === "rewriteForJob") {
+    if (action === "analyzeATS") {
+      setAtsResult(null)
+    } else {
       setRewrittenResume("")
       setContactInfo(null)
       setWordCount(null)
+      setWarning(null)
     }
 
     if (!resumeText.trim()) {
@@ -81,7 +80,6 @@ export default function Page() {
       }
 
       if (action === "analyzeATS") {
-        // ✅ نتيجة تحليل ATS
         setAtsResult({
           score: data.score,
           match_level: data.match_level,
@@ -90,11 +88,9 @@ export default function Page() {
           suggestions: data.suggestions || [],
         })
       } else {
-        // ✅ نتيجة إعادة الصياغة + عدد الكلمات + معلومات التواصل
-        const wc =
-          typeof data.word_count === "number" ? data.word_count : null
-
-        setWordCount(wc)
+        // إعادة الصياغة
+        const wc = typeof data.word_count === "number" ? data.word_count : null
+        setWordCount(wc ?? null)
         setRewrittenResume(data.rewritten_resume || "")
 
         if (data.contact_info) {
@@ -107,9 +103,11 @@ export default function Page() {
           })
         }
 
-        // ❌ لا نعتبر عدد الكلمات "خطأ" يمنع التصدير
-        // لو حاب، تقدر تخزن رسالة تحذير في state ثاني غير error
-        // حالياً نخليه بس في لون النص تحت
+        if (data.warning) {
+          setWarning(data.warning as string)
+        } else {
+          setWarning(null)
+        }
       }
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Unexpected error"
@@ -121,8 +119,8 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen p-6 flex flex-col gap-6">
-      <h1 className="text-2xl font-bold text-center mb-2">
+    <main className="min-h-screen p-6 flex flex-col gap-6 bg-slate-50">
+      <h1 className="text-2xl font-bold text-center mb-1">
         Smart ATS Resume Analyzer
       </h1>
       <p className="text-center text-sm text-gray-600 mb-4">
@@ -138,12 +136,12 @@ export default function Page() {
           <textarea
             value={resumeText}
             onChange={(e) => setResumeText(e.target.value)}
-            className="w-full h-40 border border-slate-300 rounded-md p-2 text-sm"
+            className="w-full h-40 border border-slate-300 rounded-md p-2 text-sm bg-white"
             placeholder="Paste your resume here (including your name, email, phone, etc.)..."
           />
         </div>
 
-        {/* JD INPUT */}
+        {/* JOB DESCRIPTION INPUT */}
         <div>
           <label className="block text-sm font-semibold mb-1">
             Job Description
@@ -151,7 +149,7 @@ export default function Page() {
           <textarea
             value={jobDescription}
             onChange={(e) => setJobDescription(e.target.value)}
-            className="w-full h-32 border border-slate-300 rounded-md p-2 text-sm"
+            className="w-full h-32 border border-slate-300 rounded-md p-2 text-sm bg-white"
             placeholder="Paste the target job description here..."
           />
         </div>
@@ -163,7 +161,7 @@ export default function Page() {
             disabled={loading}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white ${
               isBusy("ats") ? "bg-blue-400" : "bg-blue-600 hover:bg-blue-700"
-            }`}
+            } disabled:opacity-60 disabled:cursor-not-allowed`}
           >
             {isBusy("ats") ? "Analyzing..." : "Analyze ATS"}
           </button>
@@ -175,7 +173,7 @@ export default function Page() {
               isBusy("rewrite")
                 ? "bg-emerald-400"
                 : "bg-emerald-600 hover:bg-emerald-700"
-            }`}
+            } disabled:opacity-60 disabled:cursor-not-allowed`}
           >
             {isBusy("rewrite") ? "Rewriting..." : "Rewrite for this Job"}
           </button>
@@ -237,7 +235,7 @@ export default function Page() {
         {/* REWRITTEN RESUME */}
         {rewrittenResume && (
           <div className="mt-4 border border-slate-200 rounded-md p-4 bg-white">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 gap-3">
               <h2 className="font-semibold">Rewritten Resume</h2>
 
               <PdfDownloadButton
@@ -251,12 +249,11 @@ export default function Page() {
                     location: "",
                   }
                 }
-                // ✅ ما نربط الزر بعدد الكلمات
                 disabled={loading}
               />
             </div>
 
-            {/* عرض معلومات التواصل المستخرَجة */}
+            {/* Contact Info المستخرجة */}
             {contactInfo &&
               (contactInfo.fullName ||
                 contactInfo.email ||
@@ -281,22 +278,24 @@ export default function Page() {
                 </div>
               )}
 
-            {/* ✅ عرض عدد الكلمات فقط كتوصية (أخضر / أحمر) */}
+            {/* Word Count + Warning */}
             {wordCount !== null && (
-              <p
-                className={`text-xs mb-2 ${
-                  isWordCountValid ? "text-emerald-600" : "text-red-600"
-                }`}
-              >
-                Word count: {wordCount} (recommended: 500–700 words)
+              <p className="text-xs mb-1 text-slate-700">
+                Word count: {wordCount}
               </p>
             )}
 
-            {/* النص نفسه */}
+            {warning && wordCount !== null && (
+              <p className="text-amber-600 text-xs mb-2">
+                ⚠️ الطول المثالي بين 450–700 كلمة. الحالي: {wordCount}.
+              </p>
+            )}
+
+            {/* النص المحسّن */}
             <textarea
               readOnly
               value={rewrittenResume}
-              className="w-full h-48 border border-slate-200 rounded-md p-2 text-sm"
+              className="w-full h-56 border border-slate-200 rounded-md p-2 text-sm bg-slate-50"
             />
           </div>
         )}
