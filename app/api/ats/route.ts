@@ -162,6 +162,52 @@ async function callGroqChat(
   return content as string
 }
 
+// 🔁 قوائم الموديلات مع fallback
+
+const atsModels = [
+  "llama-4-scout-17b-16e-instruc", // جديد – نحاول به أولاً
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+]
+
+const contactModels = [
+  "llama-3.1-8b-instant", // خفيف ورخيص كبداية
+  "llama-4-scout-17b-16e-instruc",
+  "llama-3.3-70b-versatile",
+]
+
+const rewriteModels = [
+  "llama-4-scout-17b-16e-instruc", // الأساسي لإعادة الصياغة
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+]
+
+async function callGroqWithFallback(
+  models: string[],
+  messages: { role: string; content: string }[],
+  temperature: number,
+  maxTokens: number,
+) {
+  let lastError: unknown
+
+  for (const model of models) {
+    try {
+      console.log(`[Groq] Trying model: ${model}`)
+      const result = await callGroqChat(model, messages, temperature, maxTokens)
+      console.log(`[Groq] Model ${model} succeeded`)
+      return result
+    } catch (err) {
+      lastError = err
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[Groq] Model ${model} failed: ${msg}`)
+      // نكمل للموديل اللي بعده
+      continue
+    }
+  }
+
+  throw lastError ?? new Error("All Groq models failed")
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -266,8 +312,8 @@ JOB DESCRIPTION:
 ${payload.jobDescription}`
 
         // نستخدم max_tokens صغير عشان نوفر توكن – الرد JSON قصير
-        const content = await callGroqChat(
-          "llama-3.3-70b-versatile",
+        const content = await callGroqWithFallback(
+          atsModels,
           [
             {
               role: "system",
@@ -300,8 +346,8 @@ If a field is not found, use empty string "".
 Resume text:
 ${payload.resume}`
 
-        const contactContent = await callGroqChat(
-          "llama-3.3-70b-versatile",
+        const contactContent = await callGroqWithFallback(
+          contactModels,
           [
             {
               role: "system",
@@ -442,7 +488,6 @@ ${payload.resume}
 JOB DESCRIPTION:
 ${payload.jobDescription}`
 
-        const MAX_ATTEMPTS = 1
         const MIN_WORDS_OK = 350
         const MAX_WORDS_OK = 750
         const WARNING_THRESHOLD = 450
@@ -450,61 +495,55 @@ ${payload.jobDescription}`
         let lastRewritten = ""
         let lastWordCount = 0
 
-        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-          const content = await callGroqChat(
-            "llama-3.3-70b-versatile",
-            [
-              {
-                role: "system",
-                content:
-                  "You are a premium ATS resume optimization engine. You follow all formatting rules, aim for 450–700 words, write impact-focused bullets, and NEVER fabricate information. Return only valid JSON.",
-              },
-              { role: "user", content: rewritePrompt },
-            ],
-            0.35,
-            1600, // هنا نوفر مقارنة بـ 2200 لكن نخلي مجال لحد 700 كلمة
-          )
+        // محاولة واحدة فقط لكل موديل، مع fallback بين الموديلات
+        const content = await callGroqWithFallback(
+          rewriteModels,
+          [
+            {
+              role: "system",
+              content:
+                "You are a premium ATS resume optimization engine. You follow all formatting rules, aim for 450–700 words, write impact-focused bullets, and NEVER fabricate information. Return only valid JSON.",
+            },
+            { role: "user", content: rewritePrompt },
+          ],
+          0.35,
+          1600, // مساحة كافية لـ ~700 كلمة
+        )
 
-          const parsed = parseJsonSafe(content)
+        const parsed = parseJsonSafe(content)
 
-          const rewritten = (parsed.rewritten_resume as string) || ""
-          lastRewritten = rewritten
+        const rewritten = (parsed.rewritten_resume as string) || ""
+        lastRewritten = rewritten
 
-          const wordCount = countWords(rewritten)
-          lastWordCount = wordCount
+        const wordCount = countWords(rewritten)
+        lastWordCount = wordCount
 
-          console.log(
-            `REWRITE ATTEMPT ${attempt}/${MAX_ATTEMPTS} - computed wordCount = ${wordCount}`,
-          )
+        console.log(`[REWRITE] computed wordCount = ${wordCount}`)
 
-          if (wordCount >= MIN_WORDS_OK && wordCount <= MAX_WORDS_OK) {
-            const baseResponse: any = {
-              rewritten_resume: rewritten,
-              word_count: wordCount,
-              contact_info: {
-                fullName,
-                email: (contactInfo.email as string) || "",
-                phone: (contactInfo.phone as string) || "",
-                linkedin: (contactInfo.linkedin as string) || "",
-                location: (contactInfo.location as string) || "",
-              },
-            }
-
-            if (wordCount < WARNING_THRESHOLD) {
-              baseResponse.warning = "WORD_COUNT_BELOW_RECOMMENDED_RANGE_450_700"
-            }
-
-            return NextResponse.json(baseResponse)
+        if (wordCount >= MIN_WORDS_OK && wordCount <= MAX_WORDS_OK) {
+          const baseResponse: any = {
+            rewritten_resume: rewritten,
+            word_count: wordCount,
+            contact_info: {
+              fullName,
+              email: (contactInfo.email as string) || "",
+              phone: (contactInfo.phone as string) || "",
+              linkedin: (contactInfo.linkedin as string) || "",
+              location: (contactInfo.location as string) || "",
+            },
           }
 
-          console.error(
-            `LENGTH_CONSTRAINT_VIOLATION (attempt ${attempt}/${MAX_ATTEMPTS}): optimized resume has ${wordCount} words (accepted range ${MIN_WORDS_OK}-${MAX_WORDS_OK}).`,
-          )
+          if (wordCount < WARNING_THRESHOLD) {
+            baseResponse.warning = "WORD_COUNT_BELOW_RECOMMENDED_RANGE_450_700"
+          }
+
+          return NextResponse.json(baseResponse)
         }
 
+        // لو خارج النطاق حتى بعد كل الـ fallback
         return NextResponse.json(
           {
-            error: `LENGTH_CONSTRAINT_VIOLATION_AFTER_${MAX_ATTEMPTS}_ATTEMPTS`,
+            error: `LENGTH_CONSTRAINT_VIOLATION_AFTER_FALLBACK_MODELS`,
             rewritten_resume: lastRewritten,
             word_count: lastWordCount,
           },
