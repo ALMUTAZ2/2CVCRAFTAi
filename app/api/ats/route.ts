@@ -410,7 +410,7 @@ ${payload.jobDescription}`
           )
 
           // تحقق من الطول 500–700 كلمة
-          if (wordCount >= 500 && wordCount <= 700) {
+          if (wordCount >= 300 && wordCount <= 700) {
             return NextResponse.json({
               rewritten_resume: rewritten,
               word_count: wordCount,
