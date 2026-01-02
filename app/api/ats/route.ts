@@ -129,7 +129,7 @@ function countWords(text: string): number {
 async function callGroqChat(
   model: string,
   messages: { role: string; content: string }[],
-  temperature = 0.2,
+  temperature = 0.5,
 ) {
   if (!GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is missing")
@@ -226,7 +226,7 @@ Resume text:
 ${payload.resume}`
 
         const contactContent = await callGroqChat(
-          "llama-3.1-8b-instant",
+          "llama-3.3-70b-versatile",
           [
             {
               role: "system",
