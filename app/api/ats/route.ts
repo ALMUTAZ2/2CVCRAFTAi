@@ -257,12 +257,12 @@ ${payload.resume}`
           }
         }
 
-        // 2) برومبت إعادة الصياغة مع كل الشروط الصارمة
+        // 2) برومبت إعادة الصياغة مع الشروط المحدثة
         const rewritePrompt = `You are an expert ATS resume writer specializing in creating keyword-optimized, achievement-focused resumes.
 
-ABSOLUTE REQUIREMENT:
-The FINAL rewritten resume MUST be between 500 and 700 words (excluding contact info).
-This is NON-NEGOTIABLE. Do NOT output fewer than 500 words, and do NOT exceed 700 words.
+TARGET LENGTH:
+Try to keep the FINAL rewritten resume between 450 and 700 words (excluding contact info).
+This range is recommended for ATS performance, but never sacrifice truthfulness or formatting rules just to hit a specific number.
 
 CRITICAL RULES - DO NOT VIOLATE:
 
@@ -304,62 +304,56 @@ So do NOT write email, phone, or LinkedIn inside the resume text.
 
 STRUCTURE (follow this EXACT order):
 
-1. PROFESSIONAL SUMMARY (60–80 words)
+1. PROFESSIONAL SUMMARY (about 60–80 words)
 Opening line: "[X] years of experience in [field]"
 2–3 core competencies from job description that match candidate's experience
 1–2 key achievements or unique value propositions
 Must include 4–6 relevant keywords from the job description naturally
 
-2. CORE COMPETENCIES (50–70 words)
+2. CORE COMPETENCIES (about 50–70 words)
 8–12 key skills in 2–3 category groups
 Only skills from the original resume
-Format example:
+Example:
 CORE COMPETENCIES
 • Power Systems: load flow, protection, EV integration
 • Project Management: planning, stakeholder coordination
 • Tools: CAD, analytics, reporting
 
-3. PROFESSIONAL EXPERIENCE (280–350 words)
+3. PROFESSIONAL EXPERIENCE (about 280–350 words)
 List in reverse chronological order.
 For each role, first line:
 Job Title — Company — Dates
 Followed by 4–6 bullet points per role, each starting with "• ".
 Start bullets with strong action verbs (Led, Developed, Implemented, Achieved, Optimized).
-Quantify results with numbers, percentages, or scale where possible, BUT only if implied or stated in the original resume.
+Quantify results where possible, BUT only if implied or stated in the original resume.
 NO duplicate roles: if the same job repeats, merge logically into one continuous role with correct dates.
 
-4. EDUCATION (40–60 words)
+4. EDUCATION (about 40–60 words)
 Degree, Institution, Country/City, Graduation Year.
 Include relevant honors ONLY if already present in original resume.
 
-5. TECHNICAL SKILLS (50–80 words)
+5. TECHNICAL SKILLS (about 50–80 words)
 Organize by category (Programming, Tools, Systems, Standards, etc.).
 Only list technologies that appear in the original resume.
 Use concise format per line with the bullet: • Category: skill1, skill2, skill3
 
-6. LANGUAGES (20–30 words) — MANDATORY
+6. LANGUAGES (about 20–30 words) — MANDATORY
 Each language with proficiency level:
 • Arabic — Native
 • English — Fluent
 Only infer languages that are clearly implied (e.g., Saudi engineer → Arabic, English for international work).
 
-7. CERTIFICATIONS (30–50 words)
+7. CERTIFICATIONS (about 30–50 words)
 Only include REAL certifications explicitly mentioned in the resume (e.g., PMP®, PE, ISO, vendor certifications).
 Do NOT treat short trainings or webinars as certifications.
 Format:
 • Certification Name — Issuing Body — Year (if available)
 
-OPTIMIZATION STRATEGY:
-Mirror important phrases from the job description where they match the candidate's true experience.
-Replace generic wording with specific, powerful alternatives (while staying truthful).
-Turn responsibilities into achievement-driven bullets.
-Every bullet must show clear impact, scope, or ownership.
-
-WORD COUNT VERIFICATION (MUST DO BEFORE RETURNING):
+WORD COUNT VERIFICATION:
 After writing the full resume (plain_text), count the words.
-If under 500: expand existing bullets and descriptions using only existing facts.
+If under 450: where possible, expand existing bullets and descriptions using only existing facts from the original resume.
 If over 700: compress wording and remove redundant phrases, but keep all real experience.
-FINAL OUTPUT MUST BE between 500 and 700 words.
+Aim to keep the final output between 450 and 700 words, but never violate the truthfulness rules just to reach a target length.
 
 FINAL JSON RESPONSE FORMAT (MANDATORY):
 Return ONLY this JSON object, no markdown and no extra commentary:
@@ -378,7 +372,10 @@ JOB DESCRIPTION:
 ${payload.jobDescription}`
 
         const MAX_ATTEMPTS = 3
-        const MIN_FALLBACK_WORDS = 350 // أقل حد نقبله بعد 3 محاولات
+        const MIN_WORDS_OK = 350
+        const MAX_WORDS_OK = 750
+        const WARNING_THRESHOLD = 450
+
         let lastRewritten = ""
         let lastWordCount = 0
 
@@ -389,7 +386,7 @@ ${payload.jobDescription}`
               {
                 role: "system",
                 content:
-                  "You are an expert ATS resume writer. You MUST produce resumes between 500-700 words, never fabricate experience or skills, and strictly follow the formatting rules. Return only valid JSON.",
+                  "You are an expert ATS resume writer. You follow all formatting rules and try to keep resumes between 450-700 words without fabricating information. Return only valid JSON.",
               },
               { role: "user", content: rewritePrompt },
             ],
@@ -401,7 +398,7 @@ ${payload.jobDescription}`
           const rewritten = (parsed.rewritten_resume as string) || ""
           lastRewritten = rewritten
 
-          // ✅ نحسب عدد الكلمات بأنفسنا ونتجاهل word_count من الموديل
+          // نحسب عدد الكلمات من النص نفسه
           const wordCount = countWords(rewritten)
           lastWordCount = wordCount
 
@@ -409,9 +406,9 @@ ${payload.jobDescription}`
             `REWRITE ATTEMPT ${attempt}/${MAX_ATTEMPTS} - computed wordCount = ${wordCount}`,
           )
 
-          // تحقق من الطول 500–700 كلمة
-          if (wordCount >= 300 && wordCount <= 700) {
-            return NextResponse.json({
+          // نقبل أي شيء بين 350 و 750 كلمة
+          if (wordCount >= MIN_WORDS_OK && wordCount <= MAX_WORDS_OK) {
+            const baseResponse = {
               rewritten_resume: rewritten,
               word_count: wordCount,
               contact_info: {
@@ -421,31 +418,26 @@ ${payload.jobDescription}`
                 linkedin: (contactInfo.linkedin as string) || "",
                 location: (contactInfo.location as string) || "",
               },
-            })
+            }
+
+            // لو أقل من 450 نضيف تحذير فقط
+            if (wordCount < WARNING_THRESHOLD) {
+              return NextResponse.json({
+                ...baseResponse,
+                warning: "WORD_COUNT_BELOW_RECOMMENDED_RANGE_450_700",
+              })
+            }
+
+            // داخل النطاق المريح → بدون تحذير
+            return NextResponse.json(baseResponse)
           }
 
           console.error(
-            `LENGTH_CONSTRAINT_VIOLATION (attempt ${attempt}/${MAX_ATTEMPTS}): optimized resume has ${wordCount} words (required 500–700).`,
+            `LENGTH_CONSTRAINT_VIOLATION (attempt ${attempt}/${MAX_ATTEMPTS}): optimized resume has ${wordCount} words (accepted range ${MIN_WORDS_OK}-${MAX_WORDS_OK}).`,
           )
         }
 
-        // لو ٣ محاولات وما ضبط، بس الكلام فوق حد أدنى (٣٠٠ كلمة مثلاً)
-        if (lastWordCount >= MIN_FALLBACK_WORDS) {
-          return NextResponse.json({
-            rewritten_resume: lastRewritten,
-            word_count: lastWordCount,
-            warning: `TARGET_LENGTH_NOT_REACHED_AFTER_${MAX_ATTEMPTS}_ATTEMPTS`,
-            contact_info: {
-              fullName,
-              email: (contactInfo.email as string) || "",
-              phone: (contactInfo.phone as string) || "",
-              linkedin: (contactInfo.linkedin as string) || "",
-              location: (contactInfo.location as string) || "",
-            },
-          })
-        }
-
-        // لو حتى بعد ٣ محاولات أقل من ٣٠٠ كلمة → نعتبره فشل حقيقي
+        // لو بعد 3 محاولات ما وصل 350–750 كلمة نعتبره فشل
         return NextResponse.json(
           {
             error: `LENGTH_CONSTRAINT_VIOLATION_AFTER_${MAX_ATTEMPTS}_ATTEMPTS`,
