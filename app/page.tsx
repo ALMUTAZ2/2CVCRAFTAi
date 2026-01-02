@@ -34,7 +34,7 @@ export default function Page() {
 
   const isBusy = (name: "ats" | "rewrite") => loading && activeAction === name
 
-  // ✅ التحقق من صلاحية عدد الكلمات (500–700)
+  // ✅ نستخدمه فقط لتلوين النص (أخضر/أحمر)، مو لتقفيل الزر
   const isWordCountValid =
     wordCount === null || (wordCount >= 500 && wordCount <= 700)
 
@@ -107,12 +107,9 @@ export default function Page() {
           })
         }
 
-        // إذا عدد الكلمات معروف وخارج المدى، نعرض تحذير
-        if (wc !== null && (wc < 500 || wc > 700)) {
-          setError(
-            `Optimized resume has ${wc} words. It MUST be between 500 and 700 words before export.`,
-          )
-        }
+        // ❌ لا نعتبر عدد الكلمات "خطأ" يمنع التصدير
+        // لو حاب، تقدر تخزن رسالة تحذير في state ثاني غير error
+        // حالياً نخليه بس في لون النص تحت
       }
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Unexpected error"
@@ -184,7 +181,7 @@ export default function Page() {
           </button>
         </div>
 
-        {/* ERROR */}
+        {/* ERROR حقيقية (شبكة / سيرفر) */}
         {error && (
           <p className="text-sm text-red-600 mt-2">
             {error}
@@ -254,8 +251,8 @@ export default function Page() {
                     location: "",
                   }
                 }
-                // ✅ نمنع التحميل إذا عدد الكلمات خارج النطاق
-                disabled={loading || !isWordCountValid}
+                // ✅ ما نربط الزر بعدد الكلمات
+                disabled={loading}
               />
             </div>
 
@@ -284,14 +281,14 @@ export default function Page() {
                 </div>
               )}
 
-            {/* ✅ عرض عدد الكلمات وحالة القبول */}
+            {/* ✅ عرض عدد الكلمات فقط كتوصية (أخضر / أحمر) */}
             {wordCount !== null && (
               <p
                 className={`text-xs mb-2 ${
                   isWordCountValid ? "text-emerald-600" : "text-red-600"
                 }`}
               >
-                Word count: {wordCount} (required: 500–700 words)
+                Word count: {wordCount} (recommended: 500–700 words)
               </p>
             )}
 
