@@ -96,7 +96,7 @@ function parseJsonSafe(content: string): any {
         if (items) result.issues = items.map((s) => s.replace(/"/g, ""))
       }
 
-      const suggestionsMatch = content.match(/"suggestions"\s*:\s*\[([\s\S]*?)\]/i)
+      const suggestionsMatch = content.match(/"suggestions"\s*:\s*\[([\س\S]*?)\]/i)
       if (suggestionsMatch) {
         const items = suggestionsMatch[1].match(/"([^"]+)"/g)
         if (items) result.suggestions = items.map((s) => s.replace(/"/g, ""))
@@ -368,7 +368,7 @@ ${payload.jobDescription}`
 
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
           const content = await callGroqChat(
-            "lima-3.3-70b", // 👈 هنا استخدمنا موديل lima الكبير
+            "llama-3.3-70b-versatile", // 👈 هنا الموديل القوي
             [
               {
                 role: "system",
