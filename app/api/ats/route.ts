@@ -66,7 +66,7 @@ function countWords(text: string): number {
   return cleaned.split(/\s+/).filter(Boolean).length
 }
 
-// 🔍 تحسين استخراج معلومات التواصل من نص السيرة الأصلي
+// 🔍 تحسين استخراج معلومات التواصل من نص السيرة
 function enhanceContactFromResume(
   resume: string,
   contact: {
@@ -79,35 +79,36 @@ function enhanceContactFromResume(
 ) {
   const updated = { ...contact }
 
-  const lines = resume
+  const text = resume || ""
+  const lines = text
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
 
   // Email
   if (!updated.email) {
-    const emailMatch = resume.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
+    const emailMatch = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
     if (emailMatch) updated.email = emailMatch[0]
   }
 
   // Phone
   if (!updated.phone) {
-    const phoneMatch = resume.match(/(\+?\d[\d\s\-()]{7,})/)
+    const phoneMatch = text.match(/(\+?\d[\d\s\-()]{7,})/)
     if (phoneMatch) updated.phone = phoneMatch[0].trim()
   }
 
   // LinkedIn
   if (!updated.linkedin) {
-    const linkedinMatch = resume.match(/(https?:\/\/)?[a-zA-Z0-9.\-]*linkedin\.com\/[^\s]+/i)
+    const linkedinMatch = text.match(/(https?:\/\/)?[a-zA-Z0-9.\-]*linkedin\.com\/[^\s]+/i)
     if (linkedinMatch) {
       updated.linkedin = linkedinMatch[0]
     } else {
-      const textMatch = resume.match(/linkedin\.com\/[^\s]+/i)
+      const textMatch = text.match(/linkedin\.com\/[^\s]+/i)
       if (textMatch) updated.linkedin = textMatch[0]
     }
   }
 
-  // Full name (أول سطر واضح، بدون إيميل/أرقام/كلمة CV)
+  // Full name (أول سطر معقول في الأعلى)
   if (!updated.full_name) {
     const nameLine = lines.find((line) => {
       if (line.length > 60) return false
@@ -167,32 +168,7 @@ const atsModels = [
   "llama-3.1-8b-instant",
 ]
 
-async function callGroqWithFallback(
-  models: string[],
-  messages: { role: string; content: string }[],
-  temperature: number,
-  maxTokens: number,
-) {
-  let lastError: unknown
-
-  for (const model of models) {
-    try {
-      console.log(`[Groq] Trying model: ${model}`)
-      const result = await callGroqChat(model, messages, temperature, maxTokens)
-      console.log(`[Groq] Model ${model} succeeded`)
-      return result
-    } catch (err) {
-      lastError = err
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[Groq] Model ${model} failed: ${msg}`)
-      continue
-    }
-  }
-
-  throw lastError ?? new Error("All Groq models failed")
-}
-
-// ✅ نفس برومبت HTML بعد ما طورناه لمسميات الأقسام واستخراج الكونتاكت
+// ✅ برومبت تحسين السيرة (نفس حق HTML لكن مطوَّر)
 const DEFAULT_HTML_PROMPT = `
 You are a Senior Executive Recruiter and ATS Auditor.
 Your job is to audit and rewrite the following resume into a high-performance, ATS-safe resume.
@@ -285,6 +261,31 @@ If the resume is too short, EXPAND ONLY based on existing information — never 
 If word count is below 500 or above 700, FIX IT before responding.
 `.trim()
 
+async function callGroqWithFallback(
+  models: string[],
+  messages: { role: string; content: string }[],
+  temperature: number,
+  maxTokens: number,
+) {
+  let lastError: unknown
+
+  for (const model of models) {
+    try {
+      console.log(`[Groq] Trying model: ${model}`)
+      const result = await callGroqChat(model, messages, temperature, maxTokens)
+      console.log(`[Groq] Model ${model} succeeded`)
+      return result
+    } catch (err) {
+      lastError = err
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[Groq] Model ${model} failed: ${msg}`)
+      continue
+    }
+  }
+
+  throw lastError ?? new Error("All Groq models failed")
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -375,7 +376,7 @@ ${jobDescription}`
         return NextResponse.json(parsed)
       }
 
-      // =============== REWRITE FOR JOB (نفس منطق HTML لكن مطوّر) ===============
+      // =============== REWRITE FOR JOB ===============
       case "rewriteForJob": {
         const promptTemplate =
           (payload.rewritePrompt && payload.rewritePrompt.trim().length > 0
@@ -409,9 +410,7 @@ ${jobDescription}`
           linkedin: "",
         }
 
-        // تحسين بيانات الاتصال من نص السيرة الأصلي
-        const enhancedContact = enhanceContactFromResume(resume, baseContact)
-
+        // ✨ نحاول نلتقط الكونتاكت من السيرة الأصلية + المحسّنة
         let finalResume: string =
           parsed.final_resume ||
           parsed.rewritten_resume ||
@@ -420,18 +419,50 @@ ${jobDescription}`
 
         finalResume = (finalResume || "").trim()
 
-        const wordCount = countWords(finalResume)
+        const contactFromOriginal = enhanceContactFromResume(resume, baseContact)
+        const contactFromImproved = enhanceContactFromResume(finalResume, contactFromOriginal)
+
+        // 🧼 تنظيف نص السيرة: منع |
+        let cleanedFinal = finalResume.replace(/\|/g, ",")
+
+        // ضبط العناوين على سطر مستقل
+        const headings = [
+          "PROFESSIONAL SUMMARY",
+          "EXPERIENCE",
+          "SKILLS",
+          "EDUCATION",
+          "CERTIFICATIONS",
+          "LANGUAGES",
+        ]
+
+        for (const h of headings) {
+          const regex = new RegExp(`${h}\\s*`, "g")
+          cleanedFinal = cleanedFinal.replace(regex, `${h}\n\n`)
+        }
+
+        const wordCount = countWords(cleanedFinal)
+
+        const contactSnake = {
+          full_name: contactFromImproved.full_name ?? "",
+          email: contactFromImproved.email ?? "",
+          phone: contactFromImproved.phone ?? "",
+          location: contactFromImproved.location ?? "",
+          linkedin: contactFromImproved.linkedin ?? "",
+        }
+
+        const contactCamel = {
+          fullName: contactSnake.full_name,
+          email: contactSnake.email,
+          phone: contactSnake.phone,
+          location: contactSnake.location,
+          linkedin: contactSnake.linkedin,
+        }
 
         return NextResponse.json({
-          contact: {
-            full_name: enhancedContact.full_name ?? "",
-            email: enhancedContact.email ?? "",
-            phone: enhancedContact.phone ?? "",
-            location: enhancedContact.location ?? "",
-            linkedin: enhancedContact.linkedin ?? "",
-          },
-          final_resume: finalResume,
-          rewritten_resume: finalResume, // للتوافق مع أي كود قديم
+          contact: contactSnake,          // snake_case
+          contact_info: contactCamel,     // camelCase لراحة الفرونت
+          final_resume: cleanedFinal,
+          rewritten_resume: cleanedFinal,
           word_count: wordCount,
           model_used: "meta-llama/llama-4-scout-17b-16e-instruct",
         })
