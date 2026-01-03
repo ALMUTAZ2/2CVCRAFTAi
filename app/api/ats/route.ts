@@ -8,7 +8,7 @@ if (!GROQ_API_KEY) {
 
 type AtsPayload = {
   resume: string
-  jobDescription: string
+  jobDescription?: string
 }
 
 function extractAndCleanJson(str: string): string {
@@ -38,7 +38,6 @@ function extractAndCleanJson(str: string): string {
   return cleaned
 }
 
-// نجعلها any عشان ما نتعب مع الـ types في الحقول القادمة
 function parseJsonSafe(content: string): any {
   try {
     return JSON.parse(content.trim())
@@ -47,13 +46,11 @@ function parseJsonSafe(content: string): any {
       const cleaned = extractAndCleanJson(content)
       return JSON.parse(cleaned)
     } catch {
-      // fallback يدوي لو احتجته لاحقاً
       throw new Error("Could not parse response as JSON")
     }
   }
 }
 
-// دالة موحدة لحساب عدد الكلمات من النص نفسه
 function countWords(text: string): number {
   if (!text) return 0
 
@@ -103,8 +100,6 @@ async function callGroqChat(
   return content as string
 }
 
-// 🔁 قوائم الموديلات مع fallback
-// (مهم: اسم موديل scout مضبوط)
 const atsModels = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "llama-3.3-70b-versatile",
@@ -150,15 +145,18 @@ export async function POST(req: Request) {
       payload: AtsPayload
     }
 
-    if (!payload?.resume || !payload?.jobDescription) {
+    // نخلي jobDescription اختياري، لكن resume لازم
+    if (!payload?.resume) {
       return NextResponse.json(
-        { error: "resume and jobDescription are required" },
+        { error: "resume is required" },
         { status: 400 },
       )
     }
 
+    const jobDesc = payload.jobDescription ?? ""
+
     switch (action) {
-      // ===================== ATS ANALYZE (بدّل البرومبت إذا حاب لاحقًا) =====================
+      // =============== ATS ANALYZE ===============
       case "analyzeATS": {
         const prompt = `You are an advanced ATS analysis engine competing with top commercial tools.
 
@@ -205,15 +203,11 @@ Return ONLY JSON in exactly this shape:
   "suggestions": []
 }
 
-- "score" must be an integer 0–100.
-- "match_level" must be one of: "Excellent", "Strong", "Okay", "Weak".
-- All array fields must be arrays of strings.
-
 RESUME:
 ${payload.resume}
 
 JOB DESCRIPTION:
-${payload.jobDescription}`
+${jobDesc}`
 
         const content = await callGroqWithFallback(
           atsModels,
@@ -233,7 +227,7 @@ ${payload.jobDescription}`
         return NextResponse.json(parsed)
       }
 
-      // ===================== REWRITE FOR JOB (منصة توليد السيرة المحسّنة) =====================
+      // =============== REWRITE FOR JOB (تحسين السيرة) ===============
       case "rewriteForJob": {
         const rewritePrompt = `
 You are a senior, premium-level ATS resume writer working for a top-tier resume optimization platform.
@@ -336,11 +330,8 @@ Return ONLY this JSON:
   "word_count": 600
 }
 
-- "word_count" is the number of words in final_resume.
-- Do NOT include any text outside this JSON.
-- Do NOT format using markdown.
-
 ====================================================
+
 ORIGINAL RESUME:
 """
 ${payload.resume}
@@ -348,7 +339,7 @@ ${payload.resume}
 
 JOB DESCRIPTION:
 """
-${payload.jobDescription}
+${jobDesc}
 """
 `
 
@@ -377,7 +368,6 @@ ${payload.jobDescription}
         }
 
         const finalResume: string = parsed.final_resume ?? ""
-        const wordCountFromModel: number | undefined = parsed.word_count
         const computedWordCount = countWords(finalResume)
 
         return NextResponse.json({
@@ -388,8 +378,10 @@ ${payload.jobDescription}
             location: contact.location ?? "",
             linkedin: contact.linkedin ?? "",
           },
+          // عشان التوافق مع الكود القديم:
+          rewritten_resume: finalResume,
           final_resume: finalResume,
-          word_count: computedWordCount || wordCountFromModel || 0,
+          word_count: computedWordCount,
         })
       }
 
