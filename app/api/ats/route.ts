@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server"
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
@@ -9,17 +10,15 @@ if (!GROQ_API_KEY) {
 type AtsPayload = {
   resume: string
   jobDescription?: string
-  rewritePrompt?: string // لو حبيت مستقبلاً تمرر برومبت مخصص من الواجهة
+  rewritePrompt?: string
 }
 
 function extractAndCleanJson(str: string): string {
-  // Remove markdown code blocks
   let cleaned = str
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/gi, "")
     .trim()
 
-  // Find JSON object boundaries
   const startIndex = cleaned.indexOf("{")
   const endIndex = cleaned.lastIndexOf("}")
 
@@ -29,7 +28,6 @@ function extractAndCleanJson(str: string): string {
 
   cleaned = cleaned.substring(startIndex, endIndex + 1)
 
-  // Replace problematic characters inside string values
   cleaned = cleaned.replace(/:\s*"([^"]*)"/g, (match, content) => {
     const safeContent = content
       .replace(/\n/g, " ")
@@ -42,13 +40,10 @@ function extractAndCleanJson(str: string): string {
   return cleaned
 }
 
-// parser عام لنتائج الموديل
 function parseJsonSafe(content: string): any {
-  // First try direct parsing
   try {
     return JSON.parse(content.trim())
   } catch {
-    // Try cleaning and extracting
     try {
       const cleaned = extractAndCleanJson(content)
       return JSON.parse(cleaned)
@@ -58,7 +53,6 @@ function parseJsonSafe(content: string): any {
   }
 }
 
-// دالة موحدة لحساب عدد الكلمات من النص نفسه
 function countWords(text: string): number {
   if (!text) return 0
 
@@ -70,6 +64,65 @@ function countWords(text: string): number {
   if (!cleaned) return 0
 
   return cleaned.split(/\s+/).filter(Boolean).length
+}
+
+// 🔍 تحسين استخراج معلومات التواصل من نص السيرة الأصلي
+function enhanceContactFromResume(
+  resume: string,
+  contact: {
+    full_name?: string
+    email?: string
+    phone?: string
+    location?: string
+    linkedin?: string
+  },
+) {
+  const updated = { ...contact }
+
+  const lines = resume
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  // Email
+  if (!updated.email) {
+    const emailMatch = resume.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
+    if (emailMatch) updated.email = emailMatch[0]
+  }
+
+  // Phone
+  if (!updated.phone) {
+    const phoneMatch = resume.match(/(\+?\d[\d\s\-()]{7,})/)
+    if (phoneMatch) updated.phone = phoneMatch[0].trim()
+  }
+
+  // LinkedIn
+  if (!updated.linkedin) {
+    const linkedinMatch = resume.match(/(https?:\/\/)?[a-zA-Z0-9.\-]*linkedin\.com\/[^\s]+/i)
+    if (linkedinMatch) {
+      updated.linkedin = linkedinMatch[0]
+    } else {
+      const textMatch = resume.match(/linkedin\.com\/[^\s]+/i)
+      if (textMatch) updated.linkedin = textMatch[0]
+    }
+  }
+
+  // Full name (أول سطر واضح، بدون إيميل/أرقام/كلمة CV)
+  if (!updated.full_name) {
+    const nameLine = lines.find((line) => {
+      if (line.length > 60) return false
+      if (/@/i.test(line)) return false
+      if (/\d/.test(line)) return false
+      const lower = line.toLowerCase()
+      if (lower.includes("resume") || lower.includes("curriculum vitae") || lower.includes("cv")) {
+        return false
+      }
+      return true
+    })
+    if (nameLine) updated.full_name = nameLine
+  }
+
+  return updated
 }
 
 async function callGroqChat(
@@ -108,7 +161,6 @@ async function callGroqChat(
   return content as string
 }
 
-// موديلات ATS مع fallback
 const atsModels = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "llama-3.3-70b-versatile",
@@ -139,6 +191,99 @@ async function callGroqWithFallback(
 
   throw lastError ?? new Error("All Groq models failed")
 }
+
+// ✅ نفس برومبت HTML بعد ما طورناه لمسميات الأقسام واستخراج الكونتاكت
+const DEFAULT_HTML_PROMPT = `
+You are a Senior Executive Recruiter and ATS Auditor.
+Your job is to audit and rewrite the following resume into a high-performance, ATS-safe resume.
+
+The resume may belong to ANY profession, seniority level, or country.
+You may rephrase, restructure, and clarify the text — BUT YOU MUST NOT invent or assume ANY new information.
+Do NOT add new job titles, responsibilities, projects, tools, certifications, duties, or metrics that are not already clearly implied by the original resume.
+
+STRICT WORD COUNT REQUIREMENT
+The FINAL rewritten resume text MUST be between 500 and 700 words (inclusive).
+Never generate fewer than 500 words.
+Never exceed 700 words.
+If needed, expand wording ONLY using information that already exists in the resume.
+You MUST internally count words before responding and ONLY return output that is between 500–700 words.
+
+ATS FORMATTING RULES
+The rewritten resume must:
+- Be ATS-safe
+- Be written in English unless the source resume is fully in another language
+- Be clear, structured, and impact-driven
+- Maintain a vertical multi-line layout
+- Use only plain-text characters
+- No markdown
+- No emojis
+- No HTML
+- No decorative symbols
+- No pipe character "|"
+
+MANDATORY SECTION HEADERS
+Normalize the main sections to these exact UPPERCASE headings whenever there is relevant content in the original resume:
+
+PROFESSIONAL SUMMARY
+EXPERIENCE
+SKILLS
+EDUCATION
+CERTIFICATIONS
+LANGUAGES
+
+Rules:
+- Each heading must appear on its own line.
+- Insert one blank line between sections.
+- Inside each section, each bullet entry must start with "- " (hyphen + space) or be on its own line.
+- Do NOT invent a section if there is absolutely no related content in the original resume.
+- If the original resume uses different headings (e.g. "Work History", "Professional Background"), you MUST map them to the closest standard heading above (e.g. EXPERIENCE).
+
+CONTACT INFO RULES
+You MUST extract contact details ONLY if they exist in the resume. Do NOT invent missing fields.
+
+When extracting:
+- "full_name": usually the main name at the very top of the resume (e.g. "Al-Mutaz Mohammed Ali Abutaleb").
+- "email": any valid email address that appears (e.g. something@domain.com).
+- "phone": any phone or mobile number (e.g. starting with "+" or a sequence of digits with spaces/dashes).
+- "location": any explicit location line (e.g. "Riyadh, Saudi Arabia") if present.
+- "linkedin": any URL or text containing "linkedin.com".
+
+If a field does not appear anywhere in the resume text, return an empty string for that field.
+
+INPUT
+Resume: """ {{USER_RESUME_TEXT}} """
+
+OUTPUT FORMAT
+Return ONLY a valid JSON object using the EXACT structure below.
+Do NOT add any commentary or text outside the JSON.
+Do NOT wrap JSON in code blocks.
+
+{
+  "contact": {
+    "full_name": "",
+    "email": "",
+    "phone": "",
+    "location": "",
+    "linkedin": ""
+  },
+  "final_resume": "THE FULL REWRITTEN ATS RESUME HERE — BETWEEN 500 AND 700 WORDS ONLY"
+}
+
+JSON & VALIDATION RULES
+- Extract contact values EXACTLY as written in the resume (except trimming spaces).
+- If a field does not exist, return an empty string.
+- Do NOT infer or guess missing data.
+- Before responding, you MUST verify that:
+  - The JSON structure is valid.
+  - Word count in final_resume is between 500–700 words.
+  - No fields contain hallucinated information.
+  - No pipe characters exist.
+  - No markdown exists.
+  - Section headings use only the allowed set and correct casing.
+  - Only the JSON object is returned.
+If the resume is too short, EXPAND ONLY based on existing information — never invent.
+If word count is below 500 or above 700, FIX IT before responding.
+`.trim()
 
 export async function POST(req: Request) {
   try {
@@ -230,84 +375,18 @@ ${jobDescription}`
         return NextResponse.json(parsed)
       }
 
-      // =============== REWRITE FOR JOB (نفس منطق HTML) ===============
+      // =============== REWRITE FOR JOB (نفس منطق HTML لكن مطوّر) ===============
       case "rewriteForJob": {
-        // برومبت HTML اللي عطيتني إياه حرفيًا
-        const DEFAULT_HTML_PROMPT = `
-You are a Senior Executive Recruiter and ATS Auditor.
-Your job is to audit and rewrite the following resume into a high-performance, ATS-safe resume.
-The resume may belong to ANY profession, seniority level, or country.
-You may rephrase, restructure, and clarify the text — BUT YOU MUST NOT invent or assume ANY new information.
-Do NOT add new job titles, responsibilities, projects, tools, certifications, duties, or metrics that are not already clearly implied by the original resume.
-STRICT WORD COUNT REQUIREMENT
-The FINAL rewritten resume text MUST be between 500 and 700 words (inclusive).
-Never generate fewer than 500 words.
-Never exceed 700 words.
-If needed, expand wording ONLY using information that already exists in the resume.
-You MUST internally count words before responding and ONLY return output that is between 500–700 words.
-ATS FORMATTING RULES
-The rewritten resume must:
-• Be ATS-safe
-• Be written in English unless the source resume is fully in another language
-• Be clear, structured, and impact-driven
-• Maintain a vertical multi-line layout
-• Use only plain-text characters
-• No markdown
-• No emojis
-• No HTML
-• No decorative symbols
-• No pipe character |
-SECTION HEADERS MUST USE CLEAR UPPERCASE such as:
-PROFESSIONAL SUMMARY
-EXPERIENCE
-SKILLS
-EDUCATION
-CERTIFICATIONS
-LANGUAGES
-Each must be on its own line.
-Insert one blank line between sections.
-Inside sections, bullet entries must begin with:
-
-CONTACT INFO RULE
-Extract contact details ONLY if they exist in the resume.
-Do NOT invent missing fields.
-INPUT
-Resume: """ {{USER_RESUME_TEXT}} """
-OUTPUT FORMAT
-Return ONLY a valid JSON object using the EXACT structure below.
-Do NOT add any commentary or text outside the JSON.
-Do NOT wrap JSON in code blocks.
-{ "contact": { "full_name": "", "email": "", "phone": "", "location": "", "linkedin": "" }, "final_resume": "THE FULL REWRITTEN ATS RESUME HERE — BETWEEN 500 AND 700 WORDS ONLY" }
-CONTACT JSON RULES
-Extract values EXACTLY as written in the resume (except trimming spaces).
-If a field does not exist, return an empty string.
-Do NOT infer or guess missing data.
-VALIDATION BEFORE RESPONDING
-Before returning your answer, you MUST verify that:
-• The JSON structure is valid
-• Word count in final_resume is between 500–700 words
-• No fields contain hallucinated information
-• No pipe characters exist
-• No markdown exists
-• Resume structure follows all formatting rules
-• Only the JSON object is returned
-If the resume is too short, EXPAND ONLY based on existing information — never invent.
-If word count is below 500 or above 700, FIX IT before responding.
-        `.trim()
-
-        // لو حبيت من الواجهة ترسل rewritePrompt مخصص، نستخدمه، غير كذا نستخدم البرومبت الافتراضي
         const promptTemplate =
           (payload.rewritePrompt && payload.rewritePrompt.trim().length > 0
             ? payload.rewritePrompt
             : DEFAULT_HTML_PROMPT)
 
-        // نستبدل {{USER_RESUME_TEXT}} بالنص الفعلي للسيرة
         const effectivePrompt = promptTemplate.replace(
           "{{USER_RESUME_TEXT}}",
           resume,
         )
 
-        // نرسل للموديل بنفس أسلوب HTML: برومبت كامل في رسالة user أو system (نختار user هنا)
         const rawContent = await callGroqChat(
           "meta-llama/llama-4-scout-17b-16e-instruct",
           [
@@ -322,13 +401,16 @@ If word count is below 500 or above 700, FIX IT before responding.
 
         const parsed = parseJsonSafe(rawContent)
 
-        const contact = parsed.contact ?? {
+        const baseContact = parsed.contact ?? {
           full_name: "",
           email: "",
           phone: "",
           location: "",
           linkedin: "",
         }
+
+        // تحسين بيانات الاتصال من نص السيرة الأصلي
+        const enhancedContact = enhanceContactFromResume(resume, baseContact)
 
         let finalResume: string =
           parsed.final_resume ||
@@ -342,11 +424,11 @@ If word count is below 500 or above 700, FIX IT before responding.
 
         return NextResponse.json({
           contact: {
-            full_name: contact.full_name ?? "",
-            email: contact.email ?? "",
-            phone: contact.phone ?? "",
-            location: contact.location ?? "",
-            linkedin: contact.linkedin ?? "",
+            full_name: enhancedContact.full_name ?? "",
+            email: enhancedContact.email ?? "",
+            phone: enhancedContact.phone ?? "",
+            location: enhancedContact.location ?? "",
+            linkedin: enhancedContact.linkedin ?? "",
           },
           final_resume: finalResume,
           rewritten_resume: finalResume, // للتوافق مع أي كود قديم
