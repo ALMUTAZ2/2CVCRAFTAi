@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server"
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
@@ -11,6 +12,8 @@ type AtsPayload = {
   jobDescription?: string
   rewritePrompt?: string
 }
+
+// ------------ Helpers: JSON parsing ------------
 
 function extractAndCleanJson(str: string): string {
   let cleaned = str
@@ -52,6 +55,8 @@ function parseJsonSafe(content: string): any {
   }
 }
 
+// ------------ Helpers: word counting ------------
+
 function countWords(text: string): number {
   if (!text) return 0
 
@@ -65,7 +70,8 @@ function countWords(text: string): number {
   return cleaned.split(/\s+/).filter(Boolean).length
 }
 
-// 🔍 تحسين استخراج معلومات التواصل من نص السيرة
+// ------------ Helpers: contact extraction ------------
+
 function enhanceContactFromResume(
   resume: string,
   contact: {
@@ -107,14 +113,18 @@ function enhanceContactFromResume(
     }
   }
 
-  // Full name (أول سطر معقول في الأعلى)
+  // Full name (أول سطر معقول)
   if (!updated.full_name) {
     const nameLine = lines.find((line) => {
       if (line.length > 60) return false
       if (/@/i.test(line)) return false
       if (/\d/.test(line)) return false
       const lower = line.toLowerCase()
-      if (lower.includes("resume") || lower.includes("curriculum vitae") || lower.includes("cv")) {
+      if (
+        lower.includes("resume") ||
+        lower.includes("curriculum vitae") ||
+        lower.includes("cv")
+      ) {
         return false
       }
       return true
@@ -124,6 +134,8 @@ function enhanceContactFromResume(
 
   return updated
 }
+
+// ------------ Helpers: Groq call ------------
 
 async function callGroqChat(
   model: string,
@@ -167,8 +179,10 @@ const atsModels = [
   "llama-3.1-8b-instant",
 ]
 
-// ✅ برومبت تحسين السيرة (نفس حق HTML لكن مطوَّر)
-const DEFAULT_HTML_PROMPT = `
+// ------------ PROMPTS ------------
+
+// ✅ نفس البرومبت اللي استخدمته في صفحة HTML واشتغل معك
+const HTML_STYLE_REWRITE_PROMPT = `
 You are a Senior Executive Recruiter and ATS Auditor.
 Your job is to audit and rewrite the following resume into a high-performance, ATS-safe resume.
 
@@ -185,20 +199,18 @@ You MUST internally count words before responding and ONLY return output that is
 
 ATS FORMATTING RULES
 The rewritten resume must:
-- Be ATS-safe
-- Be written in English unless the source resume is fully in another language
-- Be clear, structured, and impact-driven
-- Maintain a vertical multi-line layout
-- Use only plain-text characters
-- No markdown
-- No emojis
-- No HTML
-- No decorative symbols
-- No pipe character "|"
+• Be ATS-safe
+• Be written in English unless the source resume is fully in another language
+• Be clear, structured, and impact-driven
+• Maintain a vertical multi-line layout
+• Use only plain-text characters
+• No markdown
+• No emojis
+• No HTML
+• No decorative symbols
+• No pipe character |
 
-MANDATORY SECTION HEADERS
-Normalize the main sections to these exact UPPERCASE headings whenever there is relevant content in the original resume:
-
+SECTION HEADERS MUST USE CLEAR UPPERCASE such as:
 PROFESSIONAL SUMMARY
 EXPERIENCE
 SKILLS
@@ -206,24 +218,13 @@ EDUCATION
 CERTIFICATIONS
 LANGUAGES
 
-Rules:
-- Each heading must appear on its own line.
-- Insert one blank line between sections.
-- Inside each section, each bullet entry must start with "- " (hyphen + space) or be on its own line.
-- Do NOT invent a section if there is absolutely no related content in the original resume.
-- If the original resume uses different headings (e.g. "Work History", "Professional Background"), you MUST map them to the closest standard heading above (e.g. EXPERIENCE).
+Each must be on its own line.
+Insert one blank line between sections.
+Inside sections, bullet entries must begin with:
 
-CONTACT INFO RULES
-You MUST extract contact details ONLY if they exist in the resume. Do NOT invent missing fields.
-
-When extracting:
-- "full_name": usually the main name at the very top of the resume (e.g. "Al-Mutaz Mohammed Ali Abutaleb").
-- "email": any valid email address that appears (e.g. something@domain.com).
-- "phone": any phone or mobile number (e.g. starting with "+" or a sequence of digits with spaces/dashes).
-- "location": any explicit location line (e.g. "Riyadh, Saudi Arabia") if present.
-- "linkedin": any URL or text containing "linkedin.com".
-
-If a field does not appear anywhere in the resume text, return an empty string for that field.
+CONTACT INFO RULE
+Extract contact details ONLY if they exist in the resume.
+Do NOT invent missing fields.
 
 INPUT
 Resume: """ {{USER_RESUME_TEXT}} """
@@ -244,69 +245,26 @@ Do NOT wrap JSON in code blocks.
   "final_resume": "THE FULL REWRITTEN ATS RESUME HERE — BETWEEN 500 AND 700 WORDS ONLY"
 }
 
-JSON & VALIDATION RULES
-- Extract contact values EXACTLY as written in the resume (except trimming spaces).
-- If a field does not exist, return an empty string.
-- Do NOT infer or guess missing data.
-- Before responding, you MUST verify that:
-  - The JSON structure is valid.
-  - Word count in final_resume is between 500–700 words.
-  - No fields contain hallucinated information.
-  - No pipe characters exist.
-  - No markdown exists.
-  - Section headings use only the allowed set and correct casing.
-  - Only the JSON object is returned.
+CONTACT JSON RULES
+Extract values EXACTLY as written in the resume (except trimming spaces).
+If a field does not exist, return an empty string.
+Do NOT infer or guess missing data.
+
+VALIDATION BEFORE RESPONDING
+Before returning your answer, you MUST verify that:
+• The JSON structure is valid
+• Word count in final_resume is between 500–700 words
+• No fields contain hallucinated information
+• No pipe characters exist
+• No markdown exists
+• Resume structure follows all formatting rules
+• Only the JSON object is returned
 If the resume is too short, EXPAND ONLY based on existing information — never invent.
 If word count is below 500 or above 700, FIX IT before responding.
 `.trim()
 
-async function callGroqWithFallback(
-  models: string[],
-  messages: { role: string; content: string }[],
-  temperature: number,
-  maxTokens: number,
-) {
-  let lastError: unknown
-
-  for (const model of models) {
-    try {
-      console.log(`[Groq] Trying model: ${model}`)
-      const result = await callGroqChat(model, messages, temperature, maxTokens)
-      console.log(`[Groq] Model ${model} succeeded`)
-      return result
-    } catch (err) {
-      lastError = err
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[Groq] Model ${model} failed: ${msg}`)
-      continue
-    }
-  }
-
-  throw lastError ?? new Error("All Groq models failed")
-}
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json()
-    const { action, payload } = body as {
-      action: string
-      payload: AtsPayload
-    }
-
-    if (!payload?.resume) {
-      return NextResponse.json(
-        { error: "resume is required" },
-        { status: 400 },
-      )
-    }
-
-    const resume = payload.resume
-    const jobDescription = payload.jobDescription ?? ""
-
-    switch (action) {
-      // =============== ATS ANALYZE ===============
-      case "analyzeATS": {
-        const prompt = `You are an advanced ATS analysis engine competing with top commercial tools.
+const ATS_ANALYZE_PROMPT = (resume: string, jobDescription: string) => `
+You are an advanced ATS analysis engine competing with top commercial tools.
 
 TASK:
 Deeply analyze the following resume against the job description and return a structured ATS report.
@@ -331,8 +289,7 @@ MATCH LEVEL (based on final score):
 - 50–69: "Okay"
 - 0–49: "Weak"
 
-OUTPUT REQUIREMENTS:
-Return ONLY JSON in exactly this shape:
+RETURN JSON ONLY IN THIS FORMAT:
 
 {
   "score": 82,
@@ -355,10 +312,43 @@ RESUME:
 ${resume}
 
 JOB DESCRIPTION:
-${jobDescription}`
+${jobDescription}
+`.trim()
 
-        const content = await callGroqWithFallback(
-          atsModels,
+// ------------ API HANDLER ------------
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+    const { action, payload } = body as {
+      action: string
+      payload: AtsPayload
+    }
+
+    if (!payload?.resume) {
+      return NextResponse.json(
+        { error: "resume is required" },
+        { status: 400 },
+      )
+    }
+
+    const resume = payload.resume
+    const jobDescription = payload.jobDescription ?? ""
+
+    switch (action) {
+      // ====== ATS ANALYZE ======
+      case "analyzeATS": {
+        if (!jobDescription) {
+          return NextResponse.json(
+            { error: "jobDescription is required for analyzeATS" },
+            { status: 400 },
+          )
+        }
+
+        const prompt = ATS_ANALYZE_PROMPT(resume, jobDescription)
+
+        const content = await callGroqChat(
+          atsModels[0],
           [
             {
               role: "system",
@@ -368,19 +358,19 @@ ${jobDescription}`
             { role: "user", content: prompt },
           ],
           0.2,
-          600,
+          700,
         )
 
         const parsed = parseJsonSafe(content)
         return NextResponse.json(parsed)
       }
 
-      // =============== REWRITE FOR JOB ===============
+      // ====== REWRITE FOR JOB ======
       case "rewriteForJob": {
         const promptTemplate =
           (payload.rewritePrompt && payload.rewritePrompt.trim().length > 0
             ? payload.rewritePrompt
-            : DEFAULT_HTML_PROMPT)
+            : HTML_STYLE_REWRITE_PROMPT)
 
         const effectivePrompt = promptTemplate.replace(
           "{{USER_RESUME_TEXT}}",
@@ -388,7 +378,7 @@ ${jobDescription}`
         )
 
         const rawContent = await callGroqChat(
-          "meta-llama/llama-4-scout-17b-16e-instruct",
+          atsModels[0],
           [
             {
               role: "user",
@@ -409,37 +399,16 @@ ${jobDescription}`
           linkedin: "",
         }
 
-        // ✨ نحاول نلتقط الكونتاكت من السيرة الأصلية + المحسّنة
-        let finalResume: string =
-          parsed.final_resume ||
-          parsed.rewritten_resume ||
-          parsed.CV ||
-          ""
+        let finalResume: string = parsed.final_resume || ""
 
         finalResume = (finalResume || "").trim()
+        // بس نشيل الـ pipe لو طلع، بدون أي تعديل تنسيق
+        finalResume = finalResume.replace(/\|/g, ",")
 
         const contactFromOriginal = enhanceContactFromResume(resume, baseContact)
         const contactFromImproved = enhanceContactFromResume(finalResume, contactFromOriginal)
 
-        // 🧼 تنظيف نص السيرة: منع |
-        let cleanedFinal = finalResume.replace(/\|/g, ",")
-
-        // ضبط العناوين على سطر مستقل
-        const headings = [
-          "PROFESSIONAL SUMMARY",
-          "EXPERIENCE",
-          "SKILLS",
-          "EDUCATION",
-          "CERTIFICATIONS",
-          "LANGUAGES",
-        ]
-
-        for (const h of headings) {
-          const regex = new RegExp(`${h}\\s*`, "g")
-          cleanedFinal = cleanedFinal.replace(regex, `${h}\n\n`)
-        }
-
-        const wordCount = countWords(cleanedFinal)
+        const wordCount = countWords(finalResume)
 
         const contactSnake = {
           full_name: contactFromImproved.full_name ?? "",
@@ -458,12 +427,12 @@ ${jobDescription}`
         }
 
         return NextResponse.json({
-          contact: contactSnake,          // snake_case
-          contact_info: contactCamel,     // camelCase لراحة الفرونت
-          final_resume: cleanedFinal,
-          rewritten_resume: cleanedFinal,
+          contact: contactSnake,
+          contact_info: contactCamel,
+          final_resume: finalResume,
+          rewritten_resume: finalResume,
           word_count: wordCount,
-          model_used: "meta-llama/llama-4-scout-17b-16e-instruct",
+          model_used: atsModels[0],
         })
       }
 
