@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server"
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
@@ -15,6 +14,7 @@ type AtsPayload = {
 
 // ------------ Helpers: JSON parsing ------------
 
+// ✅ تم تعديلها: ما عاد نلمس الـ \n داخل النص، بس نشيل الـ ```json والـ ``` ونقص JSON صح
 function extractAndCleanJson(str: string): string {
   let cleaned = str
     .replace(/```json\s*/gi, "")
@@ -28,18 +28,8 @@ function extractAndCleanJson(str: string): string {
     throw new Error("No valid JSON object found in response")
   }
 
-  cleaned = cleaned.substring(startIndex, endIndex + 1)
-
-  cleaned = cleaned.replace(/:\s*"([^"]*)"/g, (match, content) => {
-    const safeContent = content
-      .replace(/\n/g, " ")
-      .replace(/\r/g, " ")
-      .replace(/\t/g, " ")
-      .replace(/\\/g, "\\\\")
-    return `: "${safeContent}"`
-  })
-
-  return cleaned
+  // نرجّع JSON مثل ما هو بدون تعديل المحتوى داخل الـ strings
+  return cleaned.substring(startIndex, endIndex + 1)
 }
 
 function parseJsonSafe(content: string): any {
@@ -181,7 +171,6 @@ const atsModels = [
 
 // ------------ PROMPTS ------------
 
-// ✅ نفس البرومبت اللي استخدمته في صفحة HTML واشتغل معك
 const HTML_STYLE_REWRITE_PROMPT = `
 You are a Senior Executive Recruiter and ATS Auditor.
 Your job is to audit and rewrite the following resume into a high-performance, ATS-safe resume.
