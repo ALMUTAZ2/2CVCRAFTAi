@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server"
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
@@ -12,10 +13,12 @@ type AtsPayload = {
   rewritePrompt?: string
 }
 
-// ------------ Helpers: JSON parsing ------------
+// =====================================================
+// Helpers: JSON parsing
+// =====================================================
 
-// ✅ تم تعديلها: ما عاد نلمس الـ \n داخل النص، بس نشيل الـ ```json والـ ``` ونقص JSON صح
 function extractAndCleanJson(str: string): string {
+  // نشيل أي code fences لو الموديل رجّع ```json ... ```
   let cleaned = str
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/gi, "")
@@ -28,8 +31,19 @@ function extractAndCleanJson(str: string): string {
     throw new Error("No valid JSON object found in response")
   }
 
-  // نرجّع JSON مثل ما هو بدون تعديل المحتوى داخل الـ strings
-  return cleaned.substring(startIndex, endIndex + 1)
+  cleaned = cleaned.substring(startIndex, endIndex + 1)
+
+  // نأمّن القيم النصية بدون ما نكسر الـ line breaks
+  cleaned = cleaned.replace(/:\s*"([^"]*)"/g, (match, content) => {
+    const safeContent = content
+      .replace(/\r/g, "")        // نشيل \r
+      .replace(/\t/g, " ")       // التاب نخليه مسافة
+      .replace(/\\/g, "\\\\")    // نهرب الـ backslash
+      .replace(/\n/g, "\\n")     // نحول newline إلى \n عشان JSON.parse يقبله
+    return `: "${safeContent}"`
+  })
+
+  return cleaned
 }
 
 function parseJsonSafe(content: string): any {
@@ -45,7 +59,9 @@ function parseJsonSafe(content: string): any {
   }
 }
 
-// ------------ Helpers: word counting ------------
+// =====================================================
+// Helpers: word counting
+// =====================================================
 
 function countWords(text: string): number {
   if (!text) return 0
@@ -60,7 +76,9 @@ function countWords(text: string): number {
   return cleaned.split(/\s+/).filter(Boolean).length
 }
 
-// ------------ Helpers: contact extraction ------------
+// =====================================================
+// Helpers: contact extraction
+// =====================================================
 
 function enhanceContactFromResume(
   resume: string,
@@ -125,7 +143,9 @@ function enhanceContactFromResume(
   return updated
 }
 
-// ------------ Helpers: Groq call ------------
+// =====================================================
+// Helpers: Groq call
+// =====================================================
 
 async function callGroqChat(
   model: string,
@@ -169,8 +189,11 @@ const atsModels = [
   "llama-3.1-8b-instant",
 ]
 
-// ------------ PROMPTS ------------
+// =====================================================
+// PROMPTS
+// =====================================================
 
+// نفس البرومبت اللي كنت تستخدمه للـ HTML
 const HTML_STYLE_REWRITE_PROMPT = `
 You are a Senior Executive Recruiter and ATS Auditor.
 Your job is to audit and rewrite the following resume into a high-performance, ATS-safe resume.
@@ -209,7 +232,6 @@ LANGUAGES
 
 Each must be on its own line.
 Insert one blank line between sections.
-Inside sections, bullet entries must begin with:
 
 CONTACT INFO RULE
 Extract contact details ONLY if they exist in the resume.
@@ -304,7 +326,9 @@ JOB DESCRIPTION:
 ${jobDescription}
 `.trim()
 
-// ------------ API HANDLER ------------
+// =====================================================
+// API HANDLER
+// =====================================================
 
 export async function POST(req: Request) {
   try {
@@ -357,9 +381,9 @@ export async function POST(req: Request) {
       // ====== REWRITE FOR JOB ======
       case "rewriteForJob": {
         const promptTemplate =
-          (payload.rewritePrompt && payload.rewritePrompt.trim().length > 0
+          payload.rewritePrompt && payload.rewritePrompt.trim().length > 0
             ? payload.rewritePrompt
-            : HTML_STYLE_REWRITE_PROMPT)
+            : HTML_STYLE_REWRITE_PROMPT
 
         const effectivePrompt = promptTemplate.replace(
           "{{USER_RESUME_TEXT}}",
@@ -391,11 +415,14 @@ export async function POST(req: Request) {
         let finalResume: string = parsed.final_resume || ""
 
         finalResume = (finalResume || "").trim()
-        // بس نشيل الـ pipe لو طلع، بدون أي تعديل تنسيق
+        // نحذف الـ pipe لو طلع من الموديل
         finalResume = finalResume.replace(/\|/g, ",")
 
         const contactFromOriginal = enhanceContactFromResume(resume, baseContact)
-        const contactFromImproved = enhanceContactFromResume(finalResume, contactFromOriginal)
+        const contactFromImproved = enhanceContactFromResume(
+          finalResume,
+          contactFromOriginal,
+        )
 
         const wordCount = countWords(finalResume)
 
